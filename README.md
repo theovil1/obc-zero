@@ -20,6 +20,26 @@ with an auditable record of what was tested and what failed.
 Pre-alpha. Nothing here has flown. Nothing here is qualified.
 Treat every claim in `docs/` as a lab result, not a flight heritage claim.
 
+**Milestone 0 complete.** The image boots on QEMU `sifive_e` and reports its
+build, entry point and memory footprint. Current figures, measured on a clean
+tree and pinned against drift:
+
+| | |
+|---|---|
+| Flash | 874 B of a 4 MiB budget |
+| RAM | 1024 B of **16384 B**, the whole of the board's memory |
+| Stack peak | 64 B, measured from a paint pattern at run time |
+| Boot to banner | under 0.1 s |
+
+Every address the image relies on was read out of the machine rather than taken
+from documentation, and the reset vector was confirmed independently through the
+debugger. The reasoning is in `docs/adr/`, the measurements in
+`docs/LOGBOOK.md`, and the RAM allocation for later milestones in
+`docs/BUDGET.md`.
+
+Fault injection does not exist yet. Until it does, this repository demonstrates
+nothing about fault tolerance, which is the only thing it is ultimately for.
+
 ## Scope
 
 An on-board computer does four things. OBC-Zero implements them in this order:
@@ -59,9 +79,20 @@ git clone https://github.com/<user>/obc-zero.git
 cd obc-zero
 make build          # produces build/obc.elf
 make run            # boots the image under QEMU, Ctrl-A X to exit
-make test           # runs the nominal test suite
-make fault          # runs the fault injection campaign
+make test           # smoke test: the image boots and identifies itself
+make measure        # reference measurement; refuses to run on a dirty tree
+make gdb            # QEMU halted at reset with a gdbstub on :1234
+make attach         # attach gdb-multiarch to a `make gdb` in another shell
 ```
+
+`make fault` is not implemented yet. The fault injection campaign arrives with
+the harness; until then there is no campaign to run and this README will not
+pretend otherwise.
+
+Everything runs under `-icount shift=0`, which makes guest execution
+deterministic. That is what allows a per-task budget to mean anything and a
+seeded fault injector to land on the same instruction every run. See
+`docs/adr/0002-time-domains.md`.
 
 ## Repository layout
 

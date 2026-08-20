@@ -22,6 +22,18 @@ GDBFLAGS := -ex 'set architecture riscv:rv32' -ex 'target remote localhost:1234'
 QEMU    := qemu-system-riscv32
 MACHINE := sifive_e
 
+# Deterministic execution, one guest instruction per virtual cycle.
+#
+# Without it, mcycle and minstret report host behaviour: the same workload
+# varies by 12 % between runs, per-task budgets cannot be enforced, and a seeded
+# fault injector lands on a different instruction every time. With it, both
+# counters are exact and an execution position is reproducible.
+#
+# Applied to every invocation, not only to campaigns: a test that runs under
+# different execution semantics from the campaign is not testing the campaign.
+# See docs/adr/0002-time-domains.md.
+ICOUNT  := -icount shift=0
+
 BUILD   := build
 TARGET  := $(BUILD)/obc.elf
 LDSCRIPT := emu/sifive_e.ld
@@ -125,12 +137,18 @@ SIZE_SECTIONS := \.init|\.text|\.rodata|\.data|\.bss|\.stack
 SIZE_REF      := docs/size-reference.txt
 SIZE_ACTUAL   := $(BUILD)/size-actual.txt
 
+# The toolchain version is part of the reference. A compiler upgrade changes
+# code size for reasons that have nothing to do with this project, and without
+# this header the result is a drift failure with no explanation in it. With it,
+# the diff says "gcc moved" on its first line.
 $(SIZE_ACTUAL): $(TARGET)
 	@mkdir -p $(dir $@)
-	@$(SIZE) -A $(TARGET) \
-	  | grep -E '^($(SIZE_SECTIONS))[[:space:]]' \
-	  | awk '{ printf "%-10s %6d\n", $$1, $$2 }' \
-	  | LC_ALL=C sort > $@
+	@{ echo "# gcc      $$($(CC) -dumpversion)"; \
+	   echo "# binutils $$($(CROSS)ld --version | head -1 | grep -oE '[0-9]+\.[0-9]+[.0-9]*' | head -1)"; \
+	   $(SIZE) -A $(TARGET) \
+	     | grep -E '^($(SIZE_SECTIONS))[[:space:]]' \
+	     | awk '{ printf "%-10s %6d\n", $$1, $$2 }' \
+	     | LC_ALL=C sort; } > $@
 
 size-check: $(SIZE_ACTUAL)
 	@test -f $(SIZE_REF) || { \
@@ -155,7 +173,7 @@ size-accept: $(SIZE_ACTUAL)
 
 # Interactive boot. Leave with Ctrl-A then X.
 run: $(TARGET)
-	$(QEMU) -machine $(MACHINE) -nographic -kernel $(TARGET)
+	$(QEMU) -machine $(MACHINE) $(ICOUNT) -nographic -kernel $(TARGET)
 
 # M0 smoke test: the image boots and identifies itself. Nothing more is in
 # scope at this milestone; the real harness arrives at M9.
@@ -167,7 +185,7 @@ run: $(TARGET)
 test: $(TARGET)
 	@echo "smoke: boot banner"
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
-	@$(QEMU) -machine $(MACHINE) -display none -serial file:$(BUILD)/serial.log \
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none -serial file:$(BUILD)/serial.log \
 	    -kernel $(TARGET) & \
 	 qpid=$$!; \
 	 found=0; \
@@ -209,7 +227,7 @@ measure:
 # a connection timeout rather than a refusal, which reads like a GDB fault and
 # is not one.
 gdb: $(TARGET)
-	$(QEMU) -machine $(MACHINE) -nographic -kernel $(TARGET) -s -S
+	$(QEMU) -machine $(MACHINE) $(ICOUNT) -nographic -kernel $(TARGET) -s -S
 
 # Attach to a `make gdb` already running in another shell.
 attach: $(TARGET)

@@ -24,7 +24,7 @@ MEMORY
      * The QEMU xip region spans 0x20000000-0x3fffffff (512 MiB), but that is an
      * emulator artefact: the HiFive1 this machine models carries 16 MiB of SPI
      * flash. We cap FLASH at 4 MiB so that an image which links here also fits
-     * real hardware in Phase 2, rather than designing against the emulator.
+     * a real FE310 board, rather than designing against the emulator.
      */
     FLASH (rx)  : ORIGIN = 0x20400000, LENGTH = 4M
     RAM   (rwx) : ORIGIN = 0x80000000, LENGTH = 16K

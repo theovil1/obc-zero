@@ -100,6 +100,13 @@ Two limits of the model, both established by experiment:
 hardware would keep a reset cause does not exist here, so the cause must live in
 a RAM region excluded from `.bss` zeroing.
 
+This is a **porting obligation**, not merely an emulator quirk. On a real FE310
+the reset cause belongs in the AON backup registers, which are outside the RAM
+that a brownout or an errant write can disturb. Keeping it in RAM is a
+consequence of the model, and carrying that choice onto hardware unexamined
+would weaken exactly the property the reset cause exists to establish. Recorded
+here so the port revisits it rather than inheriting it.
+
 **RAM survives a warm reset but is zeroed at cold boot.** A sentinel written
 before a watchdog reset is still present afterwards, so persistence across reset
 works. But QEMU zeroes RAM when the process starts, whereas real hardware powers
@@ -126,7 +133,7 @@ exceeding the budget is a build failure rather than a run-time surprise.
 The flash region is capped at 4 MiB in the link script rather than the 512 MiB
 the emulator offers. The 512 MiB window is an emulator artefact; the HiFive1
 this machine models carries 16 MiB. Linking against the emulator's generosity
-would produce images that cannot exist on the hardware targeted in Phase 2.
+would produce images that cannot exist on a real FE310 board.
 
 **`medany` code model is mandatory.** `medlow` addresses ±2 GiB around zero, and
 `0x80000000` falls outside that range. Building with `medlow` fails at link time.

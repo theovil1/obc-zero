@@ -5,6 +5,113 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — `-icount`, and why 32768 Hz forces a second time domain
+
+No commit measured: this records properties of the emulator, decided before M1
+so that M2 and M9 are not built on the wrong answer. Conclusions in
+`docs/adr/0002-time-domains.md`.
+
+### The consequence of 32768 Hz that I had not drawn
+
+ADR 0001 established the timebase and I treated it as a timekeeping fact. It is
+also a **resolution** fact, and that lands on M2.
+
+One tick is 30.5 µs. A task running in a few microseconds measures zero or one
+tick. So `mtime` cannot express a per-task execution budget at all, and a budget
+built on it would report zeros and pass its tests by accident — the exact
+failure mode this project exists to catch, arriving through the front door.
+
+### `mcycle` and `minstret` are unusable without `-icount`
+
+Same 1000-iteration loop, four runs:
+
+| Run | `mcycle` Δ | `minstret` Δ |
+|---|---:|---:|
+| 1 | 97664 | 113434 |
+| 2 | 92658 | 91884 |
+| 3 | 102682 | 100708 |
+| 4 | 93378 | 92170 |
+
+Twelve percent of spread. `minstret` is no better than `mcycle`, which is the
+tell: QEMU is reporting the host, not the guest.
+
+With `-icount shift=0`, the same workload gives `mcycle = minstret = 6006` on
+every run. Their equality is worth noticing rather than enjoying: under
+`-icount`, QEMU advances one cycle per instruction, so **`mcycle` is an
+instruction count wearing a cycle count's name.** It says nothing about pipeline
+or cache behaviour and must never be published as a duration.
+
+### Execution position becomes reproducible, which closes the M9 question
+
+Stepping a fixed number of instructions from a breakpoint, three runs each:
+
+| | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Without | `minstret=644399082` | `minstret=-744588599` | `minstret=2138342361` |
+| With `-icount` | `minstret=1096` | `minstret=1096` | `minstret=1096` |
+
+ADR 0001 recorded that the gdbstub attaches in wall-clock time, so a seeded
+injector would land somewhere different every run, and left the fix to be chosen
+at the start of M9 between an instruction-counter breakpoint and a TCG plugin.
+`-icount` settles it with a build flag: an injection point is a `minstret`
+value. No plugin to write.
+
+Deciding this now rather than at M9 was the whole point. Adopting it after M2
+had calibrated budgets and M9 had built injectors would have invalidated both.
+
+### A warning that did not hold, checked rather than accepted
+
+`mcycle` and `minstret` were expected to be silently read-only under QEMU. They
+are not, on 10.2.1. Writing `0x40000000` to `mcycle` and reading it back one
+instruction later:
+
+```
+mcycle   ecrit=0x40000000  relu=0x40000001  ecart=1
+minstret ecrit=0x50000000  relu=0x50000001  ecart=1
+```
+
+The delta of 1 is the intervening `csrr`. The write lands exactly. Without
+`-icount` it lands too, but the read-back has drifted by ten thousand host
+cycles — another view of the same nondeterminism.
+
+So the preset-and-provoke technique used for the `mtime` carry test applies to
+these counters as well, and acceptance criteria may rely on it. Worth stating
+because the opposite was the working assumption ten minutes earlier.
+
+### Applied
+
+`-icount shift=0` is now on every QEMU invocation in the Makefile, not only on
+campaigns: a test running under different execution semantics from the campaign
+is not testing the campaign. No measurable cost — the smoke test runs in 0.08 s.
+
+Two time domains, with non-overlapping authority: `mtime` for scheduling,
+deadlines and anything published; `minstret` for budget enforcement and
+injection coordinates, never for a duration. M2 budgets will be expressed in
+retired instructions rather than milliseconds, which is a change to how that
+milestone was described.
+
+### Also
+
+`docs/size-reference.txt` now carries the toolchain versions in its header, so a
+compiler upgrade produces a diff whose first line explains the drift instead of
+an unexplained failure.
+
+The unmodelled AON backup registers are recorded in ADR 0001 as a **porting
+obligation** rather than an emulator quirk. On a real FE310 the reset cause
+belongs there, outside the RAM a brownout can disturb; keeping it in RAM is a
+consequence of the model and must be revisited on hardware, not inherited.
+
+### Correction
+
+I attributed the 32768 Hz figure to a targeting discussion. It came from
+measurement here, against wall clock. The figure that came from a targeting
+assumption was 10 MHz, which belongs to the `virt` machine and appeared in an
+early draft of a board header that was later deleted. The distinction matters
+only because a measured value and an assumed one deserve different amounts of
+trust.
+
+---
+
 ## 2026-08-20 — History rewritten to correct the author identity
 
 No measurement here. Recorded because every commit hash in this file changed,
