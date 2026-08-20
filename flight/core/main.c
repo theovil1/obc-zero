@@ -21,9 +21,55 @@
 
 extern uint32_t __data_start[];
 extern uint32_t __bss_end[];
+extern uint32_t __stack_bottom[];
 extern uint32_t __stack_top[];
 
+/* Must match the fill written by the boot code in flight/boot/start.S. */
+#define STACK_PAINT 0xDEADBEEFu
+
 void obc_main(void);
+
+/*
+ * Deepest point the stack has reached so far, in bytes, found by walking the
+ * paint pattern up from __stack_bottom. The first word still holding the paint
+ * marks the low-water address, so everything above it has been touched.
+ *
+ * Bounded by the stack extent, which the linker fixes at build time.
+ */
+static uint32_t stack_high_water(void)
+{
+    const uint32_t *p = (const uint32_t *)__stack_bottom;
+
+    while (p < (const uint32_t *)__stack_top && *p == STACK_PAINT) {
+        p++;
+    }
+
+    return (uint32_t)((uintptr_t)__stack_top - (uintptr_t)p);
+}
+
+static obc_status_t print_stack_usage(void)
+{
+    uint32_t reserved = (uint32_t)((uintptr_t)__stack_top - (uintptr_t)__stack_bottom);
+    obc_status_t st;
+
+    st = obc_uart_puts("stack  : ");
+    if (st != OBC_OK) {
+        return st;
+    }
+    st = obc_uart_put_u32(stack_high_water());
+    if (st != OBC_OK) {
+        return st;
+    }
+    st = obc_uart_puts(" B peak of ");
+    if (st != OBC_OK) {
+        return st;
+    }
+    st = obc_uart_put_u32(reserved);
+    if (st != OBC_OK) {
+        return st;
+    }
+    return obc_uart_puts(" B reserved\r\n");
+}
 
 /*
  * Reports how much of the 16 KiB of RAM the image consumes, measured from the
@@ -77,6 +123,15 @@ void obc_main(void)
     if (st == OBC_OK) {
         st = print_ram_usage();
     }
+    if (st == OBC_OK) {
+        st = print_stack_usage();
+    }
+
+    /*
+     * Sentinel. This exact string is what the host watches for to decide that
+     * the run has reached its end state; seeing it, the harness stops QEMU
+     * rather than waiting out a timeout. Changing it breaks `make test`.
+     */
     if (st == OBC_OK) {
         (void)obc_uart_puts("boot   : ok\r\n");
     }

@@ -31,10 +31,16 @@ MEMORY
 }
 
 /*
- * Stack size. RAM is 16 KiB in total, so this is a quarter of all the memory
- * the system will ever have. Revisit once M2 has measured actual usage.
+ * Stack size. Sized from measurement, not from habit: the M0 boot path peaks
+ * at 64 bytes, read back from the paint pattern at run time. 1 KiB is sixteen
+ * times that, which covers the trap frame M1 adds and the task call depth M2
+ * adds, and returns 3 KiB to the allocation in docs/BUDGET.md.
+ *
+ * Two things keep this honest: the ASSERT below fails the build on overflow,
+ * and the banner reports the live high-water mark on every boot. Revisit at M2
+ * with a measurement taken under scheduler load, not at the banner.
  */
-__stack_size = 4K;
+__stack_size = 1K;
 
 SECTIONS
 {

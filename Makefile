@@ -17,11 +17,18 @@ BUILD   := build
 TARGET  := $(BUILD)/obc.elf
 LDSCRIPT := emu/sifive_e.ld
 
-# Build identity. Reported on the boot banner so that a captured serial log can
-# always be traced back to the exact tree that produced it.
-GIT_HASH  := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)
-GIT_DIRTY := $(shell test -n "$$(git status --porcelain 2>/dev/null)" && echo -dirty)
-BUILD_HASH := $(GIT_HASH)$(GIT_DIRTY)
+# Build identity, stamped into the boot banner. This is a build artefact, not a
+# reference: a -dirty banner is fine on a working build. Reference measurements
+# are taken by `make measure`, which refuses to run on a dirty tree at all.
+BUILD_HASH := $(shell git describe --always --dirty 2>/dev/null || echo nogit)
+
+# The exact string the host waits for to know a run has reached its end state.
+# Must match the sentinel emitted by flight/core/main.c.
+SENTINEL := boot   : ok
+
+# Upper bound on how long the host waits for the sentinel before giving up.
+# Reaching it is a failure, not a normal end of run.
+RUN_TIMEOUT_S := 10
 
 SRC_C := flight/core/main.c \
          flight/hal/uart.c
@@ -59,7 +66,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test gdb size clean
+.PHONY: all build run test measure gdb size clean
 
 all: build
 
@@ -86,14 +93,48 @@ run: $(TARGET)
 
 # M0 smoke test: the image boots and identifies itself. Nothing more is in
 # scope at this milestone; the real harness arrives at M9.
+#
+# The run ends when the host sees the sentinel, not when a timeout expires.
+# sifive_e has no test finisher, so the firmware cannot exit QEMU by itself and
+# the host has to stop it. The timeout below is the failure path, not the
+# normal one. M9 replaces this shell loop with harness/runner/.
 test: $(TARGET)
 	@echo "smoke: boot banner"
-	@out=$$(timeout 10s $(QEMU) -machine $(MACHINE) -display none \
-	          -serial stdio -kernel $(TARGET) 2>&1 || true); \
-	echo "$$out"; \
-	echo "$$out" | grep -q "boot   : ok" || { echo "FAIL: no boot confirmation"; exit 1; }; \
-	echo "$$out" | grep -q "build  : $(BUILD_HASH)" || { echo "FAIL: build hash mismatch"; exit 1; }; \
-	echo "PASS"
+	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) -display none -serial file:$(BUILD)/serial.log \
+	    -kernel $(TARGET) & \
+	 qpid=$$!; \
+	 found=0; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   if grep -qF "$(SENTINEL)" $(BUILD)/serial.log 2>/dev/null; then found=1; break; fi; \
+	   kill -0 $$qpid 2>/dev/null || break; \
+	   sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 cat $(BUILD)/serial.log; \
+	 test $$found -eq 1 || { echo "FAIL: sentinel not seen within $(RUN_TIMEOUT_S)s"; exit 1; }; \
+	 grep -qF "build  : $(BUILD_HASH)" $(BUILD)/serial.log \
+	   || { echo "FAIL: build hash mismatch"; exit 1; }; \
+	 echo "PASS"
+
+# Reference measurement. Refuses to run on a dirty tree: a -dirty hash is not
+# reproducible by anyone, and reproducibility is the whole claim of this
+# project. Commit first, measure second, record the result in a later commit
+# that names the commit it measured.
+measure:
+	@test -z "$$(git status --porcelain 2>/dev/null)" \
+	  || { echo "REFUSED: working tree is dirty."; \
+	       echo "A reference measurement must name a commit others can check out."; \
+	       git status --short; exit 1; }
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory $(TARGET) >/dev/null
+	@echo "commit : $$(git rev-parse HEAD)"
+	@echo "describe: $$(git describe --always --dirty)"
+	@echo "toolchain: $$($(CC) -dumpversion), $$($(QEMU) --version | head -1)"
+	@echo
+	@$(SIZE) $(TARGET)
+	@echo
+	@$(MAKE) --no-print-directory test
 
 # Halted at reset with a gdbstub on :1234. In another shell:
 #   $(GDB) $(TARGET) -ex 'target remote :1234'

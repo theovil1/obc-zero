@@ -81,11 +81,12 @@ RAM, so the startup code must copy it. This is why `.data` copy is part of M0
 rather than an optimisation.
 
 **RAM is 16 KiB, and that is the binding constraint of the whole project.** It
-holds `.data`, `.bss`, and the stack, and nothing else. The current allocation
-is 4 KiB of stack and 0 bytes of `.data`/`.bss`. Every later milestone competes
-for the remaining 12 KiB: triple-redundant state (M4), the event log (M8), and
-telemetry buffers (M6) all live here. The link script asserts on overflow so
-that exceeding it is a build failure rather than a run-time surprise.
+holds `.data`, `.bss`, and the stack, and nothing else. Every later milestone
+competes for it: triple-redundant state (M4), telemetry buffers (M6), the
+command queue (M7) and the event log (M8) all live here. The split between them
+is fixed in advance in `docs/BUDGET.md` rather than settled by whichever
+subsystem is written first. The link script asserts on total overflow, so
+exceeding the budget is a build failure rather than a run-time surprise.
 
 The flash region is capped at 4 MiB in the link script rather than the 512 MiB
 the emulator offers. The 512 MiB window is an emulator artefact; the HiFive1
@@ -102,18 +103,39 @@ lacks; it only names an extension that was previously implicit.
 
 **There is no test finisher device.** Unlike the `virt` machine, `sifive_e`
 offers no MMIO register by which the firmware can terminate the emulator with an
-exit status. The harness cannot rely on a process exit code to decide pass or
-fail, and must instead drive run termination from the host side, through the
-gdbstub, a timeout, or a sentinel in the serial stream. This constrains the
-design of `harness/runner/` at M9 and is recorded here so the constraint is not
-discovered then.
+exit status. Two mechanisms cover this, and the choice between them is a safety
+decision rather than a convenience one.
 
-**No RISC-V GDB is packaged on the development host.** Neither
-`riscv64-unknown-elf-gdb` nor `gdb-multiarch` ships with the Ubuntu packages
-installed, and the native `gdb` does not know the `riscv:rv32` architecture.
-`make gdb` starts QEMU with `-s -S` and is therefore only half usable until a
-debugger is installed. M9 depends on the gdbstub for fault injection, so this
-must be resolved before then; it does not block M0 through M8.
+*Serial sentinel, used now.* The firmware emits a known string when a run
+reaches its end state and the host stops QEMU on seeing it. This costs the
+flight image nothing it was not already doing, and is what `make test` uses.
+
+*RISC-V semihosting, available but gated.* QEMU implements it on this machine.
+Verified directly: an image issuing `SYS_EXIT_EXTENDED` with a parameter block
+of `{0x20026, 42}` under `-semihosting-config enable=on,target=native` makes
+QEMU exit with status 42, immediately and with no finisher hardware.
+
+Semihosting must be compiled in **behind a test-only build flag and must never
+appear in a flight image**. It is a call gate from the firmware into the host:
+in an emulated test that is a clean exit path, on a real vehicle it is a defect
+with no defensible purpose. The build must make it impossible to ship by
+accident, not merely unlikely.
+
+**A RISC-V capable GDB is packaged, the host simply has the wrong one.**
+`gdb-multiarch` includes the RISC-V targets. The native `gdb` reports
+`configure --host=x86_64-linux-gnu --target=x86_64-linux-gnu`, which is why it
+rejects `set architecture riscv:rv32`. The fix is `apt install gdb-multiarch`
+and setting the architecture explicitly before `target remote`; nothing needs to
+be built from source.
+
+**The gdbstub attaches in wall-clock time, not instruction count.** This is the
+real constraint on M9, and it is sharper than the packaging question. M9 requires
+injectors that are deterministic given a seed, but a host that attaches and
+corrupts memory after a wall-clock delay will land on a different instruction
+every run. Determinism therefore needs either a breakpoint on an instruction
+counter or a TCG plugin driving the injection. **This must be settled at the
+start of M9, before any injector is written**, because it decides the whole
+architecture of `harness/faults/` rather than being fixable afterwards.
 
 ## Alternatives considered
 
@@ -130,21 +152,13 @@ any real one.
 
 ## Verification
 
-The values in this record are exercised by the M0 build and boot:
+This record holds decisions and the platform facts behind them. It deliberately
+holds **no measurements**: figures belong in `docs/LOGBOOK.md`, against the
+commit they were taken on. A decision record that quotes its own build numbers
+goes stale the first time anything is rebuilt.
 
-```
-$ make build
-   text    data     bss     dec     hex filename
-    706       0    4096    4802    12c2 build/obc.elf
-
-$ make test
-=== OBC-Zero ===
-build  : d668b4d1de0f-dirty
-board  : sifive_e
-entry  : 0x2040008C
-ram    : 4096 B of 16384 B
-boot   : ok
-PASS
-```
-
-The ELF entry point is `0x20400000`, matching the mask ROM jump target exactly.
+The decisions above are exercised by every build. The ELF entry point must be
+`0x20400000`, matching the mask ROM jump target, and the link script asserts
+that `.data`, `.bss` and the stack fit in 16 KiB. Both are checked by
+`make measure`, which refuses to run on a dirty tree so that the figures it
+prints always name a commit that can be checked out.
