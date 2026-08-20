@@ -101,6 +101,31 @@ obligation** rather than an emulator quirk. On a real FE310 the reset cause
 belongs there, outside the RAM a brownout can disturb; keeping it in RAM is a
 consequence of the model and must be revisited on hardware, not inherited.
 
+### Poisoned RAM, so M1 cannot be flattered by the emulator
+
+`make test-poisoned` fills the whole of RAM with a seeded pattern through the
+gdbstub before releasing the CPU, then boots normally. The image under test
+therefore starts on dirty memory rather than on QEMU's complimentary zeros.
+
+Verified rather than assumed, because a poison that silently failed to land
+would leave a test that passes for the wrong reason. Expected word at offset
+`0x3000` from the generated file, then read back from the guest after boot:
+
+```
+expected 0x80003000 = 0x0919C2B6
+0x80003000:	0x0919c2b6	0x60105a30
+0x80000000:	0xdeadbeef	0xdeadbeef
+```
+
+The poison survives where nothing writes over it, and `start.S` has repainted
+the stack on top of it at `0x80000000`. That untouched region is exactly where
+M1's reset-cause structure will live, so the magic value and the checksum will
+be tested against noise from the first run rather than against zeros that make
+them look unnecessary.
+
+Deterministic given `POISON_SEED`, which is reported on every run so a failure
+reproduces from the seed alone.
+
 ### Correction
 
 I attributed the 32768 Hz figure to a targeting discussion. It came from

@@ -95,7 +95,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test measure gdb attach size size-check size-accept clean
+.PHONY: all build run test test-poisoned measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -200,6 +200,42 @@ test: $(TARGET)
 	 grep -qF "build  : $(BUILD_HASH)" $(BUILD)/serial.log \
 	   || { echo "FAIL: build hash mismatch"; exit 1; }; \
 	 echo "PASS"
+
+# --- Poisoned-RAM boot --------------------------------------------------------
+#
+# QEMU zeroes guest RAM at cold boot; real hardware does not. Any structure that
+# is meant to survive a reset is therefore tested against a friendlier machine
+# than the one it will fly on, and a missing magic value or checksum passes.
+#
+# This target fills RAM with a seeded pattern through the gdbstub before
+# releasing the CPU, so the image boots on dirty memory. Deterministic given
+# POISON_SEED, which is reported so a failing run can be reproduced from it.
+POISON_SEED ?= 1
+
+$(BUILD)/poison.bin:
+	@mkdir -p $(dir $@)
+	@python3 -c "import random,sys; r=random.Random($(POISON_SEED)); \
+	  sys.stdout.buffer.write(bytes(r.getrandbits(8) for _ in range(16384)))" > $@
+
+test-poisoned: $(TARGET) $(BUILD)/poison.bin
+	@echo "smoke: boot banner on poisoned RAM, seed=$(POISON_SEED)"
+	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; \
+	 sleep 1; \
+	 $(GDB) $(TARGET) -batch -x emu/poison.gdb > $(BUILD)/poison.log 2>&1; \
+	 found=0; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   if grep -qF "$(SENTINEL)" $(BUILD)/serial.log 2>/dev/null; then found=1; break; fi; \
+	   kill -0 $$qpid 2>/dev/null || break; \
+	   sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 cat $(BUILD)/serial.log; \
+	 test $$found -eq 1 || { echo "FAIL: sentinel not seen, seed=$(POISON_SEED)"; \
+	                         cat $(BUILD)/poison.log; exit 1; }; \
+	 echo "PASS (seed=$(POISON_SEED))"
 
 # Reference measurement. Refuses to run on a dirty tree: a -dirty hash is not
 # reproducible by anyone, and reproducibility is the whole claim of this
