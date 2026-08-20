@@ -5,6 +5,103 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M1, first part: the machine timer and a forced carry
+
+**Measured commit:** `0d47f56d5001a81473e2086862f489b254a4e626`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### The race is forced, not awaited
+
+`mtime` is 64 bits behind two 32-bit registers, so a read can straddle the
+low-word carry. Waiting for that carry is not a test strategy: it happens once
+every 36 hours at 32768 Hz, and under `-icount` the run is deterministic, so a
+given run either meets the window or never will. Never would leave a green test
+on a broken clock forever.
+
+`emu/carry.gdb` parks the counter below the boundary and pushes it across while
+the reader sits between its two loads. The test no longer depends on the
+timebase at all, and it is the first time the injection primitives are used
+against a genuine defect rather than an intentionally broken build.
+
+### Bounded progression, because monotonicity passes on a broken clock
+
+There are two naive orderings and they fail in opposite directions:
+
+| Ordering | Wrong by | Appears to | Monotonicity catches it |
+|---|---|---|---|
+| high then low | ~2^32 too small | jump backwards | yes |
+| low then high | ~2^32 too large | keep increasing | **no** |
+
+`emu/broken/mtime_naive.c` implements the second on purpose, and is caught:
+
+```
+tick   : FAULT implausible jump of 0x00000001:0x00000000 ticks
+boot   : FAULT
+PASS (the broken build was correctly rejected)
+```
+
+Exactly 2^32, and strictly increasing. A monotonicity assertion would have
+waved it through. The correct reader under the same injection reports a maximum
+delta of `0x105`, 261 ticks, which is the predicted value.
+
+### Bounded retry, on the loop that looks harmless
+
+The high / low / re-read-high sequence loops while the high word moved. Two
+iterations are provably enough. That is an argument, not a bound, and this is
+exactly the loop where the rule gets forgotten because it looks innocent. The
+budget is capped at four; exhaustion returns `OBC_ERR_UNSTABLE` and is counted,
+turning an impossible timer into a status the caller must handle.
+
+### Two defects in the test harness, both producing false passes
+
+Found while building it, and worth recording because they are the same failure
+mode the milestone is about.
+
+**The debugger script errored and the test still reported PASS.** `break
+$carry_line` is rejected by GDB, which requires an integer for a line-spec
+convenience variable. The script aborted, the firmware ran undisturbed, the
+sentinel appeared, and the run was green on an injection that never happened.
+The script now prints `CARRY-INJECTED` after writing guest state and the run
+fails if that proof is absent.
+
+**The injection landed on the wrong read.** It hit the baseline reading that the
+loop compares against, so the baseline moved with everything else and the
+observed delta was zero — a pass with nothing exercised. The baseline read is
+now allowed through and the injection targets the one after it.
+
+A third: `MTIME_SRC` was overridden only for the sub-make that builds, so the
+broken run compiled the naive reader but pointed the debugger at the flight
+source. The breakpoint resolved against a file absent from the binary and the
+run hung rather than failing. The whole run now happens inside the sub-make, and
+the debugger has a hard timeout so a missing breakpoint can never hang again.
+
+### Measurement
+
+`make measure` on `0d47f56`:
+
+```
+   text    data     bss     dec     hex filename
+   1354       0    1028    2382     94e build/obc.elf
+```
+
+Flash 1354 B, up 480 B from 874 for the timer and the self-check. RAM 1028 B of
+16384 B, up 4 B for the unstable-read counter. Stack peak 96 B, up from 64 B.
+All within the M0 stack allocation of 1024 B; `docs/BUDGET.md` is unaffected.
+
+### One criterion deliberately left unticked
+
+"Tick counter advances and is monotonic across 10 million ticks" is **not**
+done. The boot self-check takes 64 readings, which under `-icount` all land
+inside a single 30.5 us tick, so the maximum delta it observes is zero. It shows
+that reads succeed and never regress; it shows nothing about ten million ticks.
+
+Ticking it would have been the same hollow claim this milestone exists to
+remove, so it stays open with the reason written next to it. Either implement
+the long span honestly, or replace the criterion with what the carry test
+already proves.
+
+---
+
 ## 2026-08-20 — `-icount`, and why 32768 Hz forces a second time domain
 
 No commit measured: this records properties of the emulator, decided before M1
