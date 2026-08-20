@@ -22,17 +22,22 @@ GDBFLAGS := -ex 'set architecture riscv:rv32' -ex 'target remote localhost:1234'
 QEMU    := qemu-system-riscv32
 MACHINE := sifive_e
 
-# Deterministic execution, one guest instruction per virtual cycle.
+# Deterministic execution. shift=N means one instruction consumes 2^N ns of
+# virtual time, so N sets the emulated CPU speed.
 #
-# Without it, mcycle and minstret report host behaviour: the same workload
+# Without icount, mcycle and minstret report host behaviour: the same workload
 # varies by 12 % between runs, per-task budgets cannot be enforced, and a seeded
-# fault injector lands on a different instruction every time. With it, both
-# counters are exact and an execution position is reproducible.
+# fault injector lands on a different instruction every time.
+#
+# shift=6 gives 64 ns per instruction, an emulated 15.62 MHz against the FE310's
+# real 16 MHz. shift=0 would model a 1 GHz core driving a 32768 Hz timer, a ratio
+# 64x away from the target hardware, which would distort every execution budget
+# calibrated against it. It is also 32x slower in host time for no benefit.
 #
 # Applied to every invocation, not only to campaigns: a test that runs under
 # different execution semantics from the campaign is not testing the campaign.
 # See docs/adr/0002-time-domains.md.
-ICOUNT  := -icount shift=0
+ICOUNT  := -icount shift=6
 
 BUILD   := build
 TARGET  := $(BUILD)/obc.elf
@@ -90,7 +95,7 @@ CFLAGS := $(ARCHFLAGS) \
           -Os -g3 \
           -ffunction-sections -fdata-sections \
           -Iflight \
-          -DOBC_BUILD_HASH='"$(BUILD_HASH)"' \
+          -DOBC_BUILD_HASH='"$(BUILD_HASH)"'  $(EXTRA_CFLAGS) \
           -MMD -MP
 
 ASFLAGS := $(ARCHFLAGS) -g3 -Iflight
@@ -101,7 +106,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test test-poisoned test-carry test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run test test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -218,7 +223,7 @@ test: $(TARGET)
 # either implementation cannot silently move the injection point off the read.
 CARRY_LINE = $(MTIME_SRC):$(shell grep -n 'CARRY-INJECT' $(MTIME_SRC) | cut -d: -f1)
 
-# $(1) = expected sentinel, $(2) = human label
+# $(1) = expected sentinel, $(2) = high word to cross from, $(3) = failure label
 define run_carry
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
@@ -226,7 +231,7 @@ define run_carry
 	 qpid=$$!; \
 	 sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$carry_line = "$(CARRY_LINE)"' \
-	   -x emu/carry.gdb > $(BUILD)/carry.log 2>&1; \
+	   -ex 'set $$carry_hi = $(2)' -x emu/carry.gdb > $(BUILD)/carry.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
 	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
 	   kill -0 $$qpid 2>/dev/null || break; \
@@ -238,20 +243,32 @@ define run_carry
 	   || { echo "FAIL: the injection never happened, so this test proved nothing"; \
 	        cat $(BUILD)/carry.log; exit 1; }; \
 	 grep -qF "$(1)" $(BUILD)/serial.log \
-	   || { echo "FAIL: $(2)"; cat $(BUILD)/carry.log; exit 1; }
+	   || { echo "FAIL: $(3)"; cat $(BUILD)/carry.log; exit 1; }
 endef
+
+# High words to cross from. Not 0..9: a run of consecutive values would never
+# reach a byte, half-word or sign boundary in the high word itself.
+CARRY_HI_VALUES := 0 1 2 255 256 65535 65536 2147483647 2147483648 4294967294
 
 # The flight reader must survive a carry landing between its two reads.
 test-carry: $(TARGET)
 	@echo "carry: forced mid-read carry, correct implementation"
-	$(call run_carry,boot   : ok,the flight reader did not survive a forced carry)
-	@echo "PASS"
+	@for hi in $(CARRY_HI_VALUES); do \
+	   printf "  hi=%-12s " $$hi; \
+	   $(MAKE) --no-print-directory CARRY_HI=$$hi carry-one >/dev/null 2>&1 \
+	     && echo "survived" \
+	     || { echo "FAILED"; $(MAKE) --no-print-directory CARRY_HI=$$hi carry-one; exit 1; }; \
+	 done
+	@echo "PASS (10 crossings, each in its own run)"
 
 # Internal. Same run, opposite expectation: the reader under test must be caught.
 # Not called directly — it needs MTIME_SRC set, which is what test-carry-broken
 # arranges.
+carry-one: $(TARGET)
+	$(call run_carry,boot   : ok,$(CARRY_HI),the flight reader did not survive a forced carry)
+
 test-carry-expect-fault: $(TARGET)
-	$(call run_carry,boot   : FAULT,the naive reader survived — the test detects nothing)
+	$(call run_carry,boot   : FAULT,0,the naive reader survived — the test detects nothing)
 
 # The naive reader must NOT survive the forced carry. If this passes, the test
 # is measuring nothing and every green run above is worthless.
@@ -266,6 +283,25 @@ test-carry-broken:
 	@$(MAKE) --no-print-directory MTIME_SRC=emu/broken/mtime_naive.c \
 	    test-carry-expect-fault
 	@echo "PASS (the broken build was correctly rejected)"
+	@$(MAKE) --no-print-directory clean >/dev/null
+
+# --- Read stability -----------------------------------------------------------
+#
+# A property distinct from carry handling: a reader that occasionally slips
+# would not be caught by any number of forced carries. One million reads, each
+# subject to the same bounded-progression check.
+#
+# Reported as reads and ticks, never converted to a duration. Under -icount the
+# relationship between the two and wall-clock time is a build parameter, so
+# "the clock was stable for X seconds" would be a claim this test cannot make.
+STABILITY_READS ?= 1000000
+
+test-stability:
+	@echo "stability: $(STABILITY_READS) reads under bounded-progression check"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory \
+	    EXTRA_CFLAGS='-DTICK_CHECK_READS=$(STABILITY_READS)u' \
+	    RUN_TIMEOUT_S=120 test
 	@$(MAKE) --no-print-directory clean >/dev/null
 
 # --- Poisoned-RAM boot --------------------------------------------------------

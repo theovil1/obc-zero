@@ -35,13 +35,16 @@ All on QEMU 10.2.1, `sifive_e`, four runs of an identical workload.
 A 12 % spread on `mcycle`, and `minstret` is no better: QEMU is reporting host
 behaviour, not guest instructions.
 
-**With `-icount shift=0`, both are exact and reproducible.** The same workload
-gives `mcycle = minstret = 6006` on every run, without variation.
+**With `-icount`, both are exact and reproducible.** The same workload gives
+`minstret = 6006` on every run, at either shift, without variation. At
+`shift=0`, `mcycle` reads 6006 as well; at `shift=6` it reads 384384, exactly
+64 times more.
 
-Note what that equality means: under `-icount`, QEMU advances one cycle per
-instruction. **`mcycle` is not a cycle count.** It is an instruction count
-wearing a cycle count's name, and it carries no information about pipeline
-behaviour, cache behaviour, or wall-clock duration.
+That relationship is the tell. **`mcycle` under `-icount` is not a cycle
+count**: it is virtual time divided by the shift, carrying no information about
+pipeline or cache behaviour. At `shift=0` it happens to equal `minstret`, which
+invites reading one for the other; at `shift=6` the two are visibly different
+quantities.
 
 **Execution position becomes reproducible.** Attached through the gdbstub,
 stepping a fixed number of instructions from a breakpoint:
@@ -63,7 +66,29 @@ acceptance criteria may rely on presetting them.
 
 ## Decision
 
-**Run everything under `-icount shift=0`.** Emulation, tests and fault campaigns.
+**Run everything under `-icount shift=6`.** Emulation, tests and fault campaigns.
+
+`shift=N` makes one instruction consume 2^N ns of virtual time, so N sets the
+emulated CPU speed. The choice is not free:
+
+| | `shift=0` | `shift=6` |
+|---|---|---|
+| Time per instruction | 1 ns | 64 ns |
+| Emulated CPU | 1000 MHz | **15.62 MHz** |
+| Real FE310 | 16 MHz | 16 MHz |
+| Host slowdown | ×161 | **×5** |
+| Determinism | yes | yes |
+
+`shift=0` models a 1 GHz core driving a 32768 Hz timer, a ratio 64 times away
+from the target hardware. Every execution budget calibrated against it would be
+64 times too generous relative to the clock, and would have to be recalibrated
+from scratch at the Phase 2 port. It is also 32 times slower in host time for no
+benefit. `shift=6` puts the emulated core within 2.4 % of the real part.
+
+One consequence is worth naming: under `shift=0`, `mcycle` and `minstret` were
+numerically equal, which invited reading one for the other. At `shift=6` they
+differ by exactly 64, so `minstret` is visibly the instruction count and
+`mcycle` visibly is not.
 
 **Two time domains, with separate and non-overlapping authority:**
 
@@ -81,9 +106,11 @@ which would be a fabrication.
 telemetry, not in a campaign report, not in the logbook. If a report needs a
 duration it comes from `mtime`, with the resolution stated.
 
-`minstret` is preferred to `mcycle` for budgets. Under `-icount` they are the
-same number, and `minstret` is the one whose name does not invite a false
-interpretation the day the code runs on hardware.
+`minstret` is preferred to `mcycle` for budgets. It is the true count of retired
+instructions at any shift, whereas `mcycle` tracks virtual time and changes
+meaning with the shift — and changes meaning again on hardware, where it becomes
+a real cycle count. A budget expressed in `minstret` survives all three
+contexts; one expressed in `mcycle` does not.
 
 ## Consequences
 
@@ -104,10 +131,45 @@ The cost of the decision is one build flag; the cost of deferring it is two
 milestones of results.
 
 **On hardware, both domains change meaning.** `mcycle` becomes a true cycle
-count and stops equalling `minstret`; `mtime` keeps its 32768 Hz definition.
+count, reflecting stalls and cache misses that no shift models; `mtime` keeps
+its 32768 Hz definition.
 Budgets calibrated in emulation are therefore a starting point for the port, not
 a specification. The Phase 2 port must recalibrate them and say by how much they
 moved.
+
+## Corollary: long-duration claims are bounded by instructions, not by time
+
+This follows directly from the decision above and needs stating before it is
+discovered at the worst moment, which would be while writing a report.
+
+Under `-icount`, guest time advances with instructions executed, not with the
+host clock. Measured on this machine at `shift=6`: 1024 guest ticks take 0.16 s
+of host time, a slowdown of ×5. So:
+
+| Claim | Cost |
+|---|---|
+| 72 hours of **guest** time | ~360 hours of host time, 15 days |
+| 72 hours of **host** time | ~14.4 hours of guest time |
+
+At `shift=0` the same two rows would read 14241 host hours and 21.8 guest
+minutes. The choice of shift changes the arithmetic by a factor of 32, which is
+another reason it is fixed here rather than per-campaign.
+
+**Decision, binding on M10:** the 72-hour soak is **72 hours of guest time**,
+and the report states it in guest hours with the host cost recorded alongside.
+A soak measures how long *the flight software* has been running, not how long a
+workstation was busy; expressing it in host time would make the headline figure
+depend on the speed of the machine that ran it.
+
+Fifteen days of host time for a single soak is the real cost of that choice. If
+it proves impractical, the acceptable adjustments are to shorten the soak and
+say so, or to raise the shift and say so. What is not acceptable is to run 72
+host hours and report "72-hour soak", which would overstate coverage by a factor
+of five and would be indistinguishable in the report from the honest version.
+
+**General rule:** every duration published in a campaign report is guest time,
+labelled as such, with the host cost and the `shift` value recorded next to it.
+A figure that does not say which clock it came from is not a measurement.
 
 ## Alternatives considered
 

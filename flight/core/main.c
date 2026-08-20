@@ -30,9 +30,21 @@
  */
 #define TICK_DELTA_MAX ((uint64_t)OBC_MTIME_HZ)
 
-/* Reads taken during the boot self-check. Small: this is a plausibility check
- * at boot, not the continuous monitoring M5 will add. */
+/*
+ * Reads taken during the boot self-check.
+ *
+ * Overridable at build time so that two distinct properties can be tested
+ * separately rather than conflated:
+ *
+ *   - repeated carry propagation, which needs few reads because the carries are
+ *     forced into them one at a time through the debugger;
+ *   - read stability, which needs many reads and no debugger at all.
+ *
+ * The default is the small one. `make test-stability` builds the large one.
+ */
+#ifndef TICK_CHECK_READS
 #define TICK_CHECK_READS 64u
+#endif
 
 /* Injected by the build. See BUILD_HASH in the Makefile. */
 #ifndef OBC_BUILD_HASH
@@ -134,17 +146,21 @@ static obc_status_t print_ram_usage(void)
  * Reports the largest gap observed, so a passing run still says how much margin
  * it had rather than only that it passed.
  */
-static obc_status_t check_tick_counter(uint64_t *max_delta_out)
+static obc_status_t check_tick_counter(uint64_t *max_delta_out, uint64_t *span_out)
 {
     uint64_t previous;
+    uint64_t first;
     uint64_t max_delta = 0u;
     uint32_t i;
     obc_status_t st;
+
+    *span_out = 0u;
 
     st = obc_mtime_read(&previous);
     if (st != OBC_OK) {
         return st;
     }
+    first = previous;
 
     for (i = 0u; i < TICK_CHECK_READS; i++) {
         uint64_t current;
@@ -172,6 +188,7 @@ static obc_status_t check_tick_counter(uint64_t *max_delta_out)
         previous = current;
     }
 
+    *span_out = previous - first;
     *max_delta_out = max_delta;
     return OBC_OK;
 }
@@ -179,7 +196,8 @@ static obc_status_t check_tick_counter(uint64_t *max_delta_out)
 static obc_status_t print_tick_check(void)
 {
     uint64_t max_delta = 0u;
-    obc_status_t st = check_tick_counter(&max_delta);
+    uint64_t span = 0u;
+    obc_status_t st = check_tick_counter(&max_delta, &span);
     obc_status_t w;
 
     w = obc_uart_puts("tick   : ");
@@ -211,6 +229,33 @@ static obc_status_t print_tick_check(void)
         return w;
     }
     w = obc_uart_put_hex32((uint32_t)max_delta);
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_puts(" ticks\r\n");
+    if (w != OBC_OK) {
+        return w;
+    }
+
+    /*
+     * Stated as reads and ticks, never rounded up into a duration. "10^6 reads
+     * covering N ticks" is what was measured; "the clock was stable for X
+     * seconds" would be a claim about elapsed time that this check does not
+     * make and, under -icount, could not make honestly.
+     */
+    w = obc_uart_puts("reads  : ");
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_put_u32((uint32_t)TICK_CHECK_READS);
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_puts(" covering ");
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_put_u32((uint32_t)span);
     if (w != OBC_OK) {
         return w;
     }
