@@ -19,6 +19,20 @@
 #define OBC_BUILD_HASH "unknown"
 #endif
 
+/*
+ * The build hash is held in its own section rather than concatenated into a
+ * string literal, so that it stays out of the mergeable string pool.
+ *
+ * Inside that pool the linker tail-merges strings that are suffixes of others,
+ * and whether a given merge succeeds turns out to depend on the *content* of
+ * the strings present. That made the image size vary by 4 bytes between two
+ * commits with byte-identical source, purely because their hashes differed,
+ * which quietly destroys footprint tracking across commits. Measured and
+ * recorded in docs/LOGBOOK.md.
+ */
+static const char build_hash[] __attribute__((section(".rodata.buildid"), used)) =
+    OBC_BUILD_HASH;
+
 extern uint32_t __data_start[];
 extern uint32_t __bss_end[];
 extern uint32_t __stack_bottom[];
@@ -106,7 +120,13 @@ void obc_main(void)
      */
     st = obc_uart_puts("\r\n=== OBC-Zero ===\r\n");
     if (st == OBC_OK) {
-        st = obc_uart_puts("build  : " OBC_BUILD_HASH "\r\n");
+        st = obc_uart_puts("build  : ");
+    }
+    if (st == OBC_OK) {
+        st = obc_uart_puts(build_hash);
+    }
+    if (st == OBC_OK) {
+        st = obc_uart_puts("\r\n");
     }
     if (st == OBC_OK) {
         st = obc_uart_puts("board  : sifive_e\r\n");
