@@ -69,9 +69,44 @@ Recorded from `emu/sifive_e-mtree.txt`, QEMU 10.2.1.
 | **XIP flash** | `0x20000000`–`0x3fffffff` | 512 MiB | **Yes, from `0x20400000`** |
 | **DTIM RAM** | `0x80000000`–`0x80003fff` | **16 KiB** | **Yes** |
 
-Within the MTIMER region the standard SiFive layout places `mtimecmp` at
-`0x02004000` and `mtime` at `0x0200bff8`. This has not been verified against the
-machine and must be confirmed at M1 before it is relied upon.
+### Timer, verified
+
+The MTIMER offsets were confirmed against the machine rather than taken from the
+standard SiFive layout: `mtime` at `0x0200BFF8` and `mtimecmp` at `0x02004000`.
+Both are readable and **writable**, which the M1 carry test depends on.
+
+The timebase is **32768 Hz**, measured against a host-timed interval: 32768 ticks
+elapse in 1.04 s wall clock, QEMU start-up included. This is the FE310
+low-frequency clock, and it is *not* the 10 MHz that applies to the `virt`
+machine. Taking the `virt` figure would make every deadline in the system wrong
+by a factor of 305, silently, with no test failing.
+
+`mtime` is 64 bits behind two 32-bit accesses on RV32, so any read must be
+high / low / re-read high with a retry on change. A carry occurs every 2^32
+ticks, once every 36 hours at this rate, which is why the carry has to be
+provoked by presetting the counter rather than waited for.
+
+### Reset, verified
+
+Software can trigger a **real reset** through the AON watchdog with
+`wdogcfg.rsten` set. Confirmed by observation: the boot banner repeats. This is
+a genuine reset, not a jump to the reset vector, and the distinction matters —
+a jump re-runs startup while leaving every peripheral configured.
+
+Two limits of the model, both established by experiment:
+
+**The AON backup registers are not implemented.** Writing `0xA5A5A5A5` to
+`0x10000080` reads back `0x00000000`; the write is discarded. The place real
+hardware would keep a reset cause does not exist here, so the cause must live in
+a RAM region excluded from `.bss` zeroing.
+
+**RAM survives a warm reset but is zeroed at cold boot.** A sentinel written
+before a watchdog reset is still present afterwards, so persistence across reset
+works. But QEMU zeroes RAM when the process starts, whereas real hardware powers
+up with garbage. Any persisted structure therefore needs a magic value *and* a
+checksum, and emulation will not reveal their absence: an unprotected read
+returns a plausible zero here and noise on silicon. This is a case where the
+emulator is more forgiving than reality, which is the direction that matters.
 
 ## Consequences
 

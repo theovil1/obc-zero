@@ -88,7 +88,17 @@ run that produced these numbers.
 
 Remaining unallocated after the planned lines above: 3328 B.
 
-A figure only belongs in this table once it is stable under changes that should
-not affect it. Flash footprint failed that test at M0 and was fixed; the same
-question has not yet been asked of `.data` and `.bss`, and should be before M4
-relies on them. See `docs/LOGBOOK.md`, entry "Footprint was not a stable metric".
+## Enforcement
+
+A figure in this file is a claim, and a claim is worth nothing if the number can
+move without anyone noticing. Per-section sizes are therefore pinned in
+`docs/size-reference.txt` and compared on every `make measure`. Any drift fails.
+
+This covers flash and RAM together, and it replaces the ad-hoc checking that
+would otherwise have to be remembered. Changing a size is allowed and expected;
+doing it silently is not. The sequence is `make size-accept`, then explain the
+change in the commit message.
+
+The guard was validated by making it fail before it was trusted: a one-character
+edit to a banner string moved `.rodata` by 4 bytes and was caught. It found a
+real defect on its first run, described in `docs/LOGBOOK.md`.

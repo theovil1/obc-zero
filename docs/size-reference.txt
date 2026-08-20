@@ -1,0 +1,6 @@
+.bss            0
+.data           0
+.init         138
+.rodata       204
+.stack       1024
+.text         532

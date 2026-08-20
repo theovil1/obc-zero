@@ -29,7 +29,15 @@ LDSCRIPT := emu/sifive_e.ld
 # Build identity, stamped into the boot banner. This is a build artefact, not a
 # reference: a -dirty banner is fine on a working build. Reference measurements
 # are taken by `make measure`, which refuses to run on a dirty tree at all.
-BUILD_HASH := $(shell git describe --always --dirty 2>/dev/null || echo nogit)
+#
+# Padded to a fixed width so that image size never depends on the hash. Moving
+# the hash out of the mergeable string pool removed the dependency on its
+# *content*; this removes the dependency on its *length*, which is what made a
+# -dirty build 8 bytes larger than a clean one and would otherwise make
+# `size-check` fail spuriously on any uncommitted work.
+BUILD_HASH_WIDTH := 20
+BUILD_HASH_RAW := $(shell git describe --always --dirty 2>/dev/null || echo nogit)
+BUILD_HASH := $(shell printf '%-$(BUILD_HASH_WIDTH).$(BUILD_HASH_WIDTH)s' '$(BUILD_HASH_RAW)')
 
 # The exact string the host waits for to know a run has reached its end state.
 # Must match the sentinel emitted by flight/core/main.c.
@@ -75,26 +83,75 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test measure gdb attach size clean
+.PHONY: all build run test measure gdb attach size size-check size-accept clean
 
 all: build
 
 build: $(TARGET) size
 
-$(TARGET): $(OBJ) $(LDSCRIPT)
+# Everything depends on the Makefile: CFLAGS, the build hash and the link flags
+# all live here, so an edit to this file changes the image. Omitting this
+# dependency let a stale ELF survive a flag change, and the size reference was
+# then captured from a binary that no longer matched the source.
+$(TARGET): $(OBJ) $(LDSCRIPT) Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(LDFLAGS) $(OBJ) -o $@
 
-$(BUILD)/%.o: %.c
+$(BUILD)/%.o: %.c Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/%.o: %.S
+$(BUILD)/%.o: %.S Makefile
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 size: $(TARGET)
 	@$(SIZE) $(TARGET)
+
+# --- Size reference -----------------------------------------------------------
+#
+# docs/BUDGET.md is a register of claims about memory consumption. A claim is
+# only worth something if a figure cannot move without someone noticing, so the
+# per-section sizes are pinned in a versioned reference and compared on every
+# measurement. Any drift fails the build.
+#
+# The point is not to freeze the image. It is to make every size change a
+# deliberate act: run `make size-accept` and say why in the commit message.
+#
+# Debug sections are excluded on purpose. They are not loaded, they do not
+# consume flash or RAM, and they move with compiler flags that have nothing to
+# do with the budget.
+SIZE_SECTIONS := \.init|\.text|\.rodata|\.data|\.bss|\.stack
+SIZE_REF      := docs/size-reference.txt
+SIZE_ACTUAL   := $(BUILD)/size-actual.txt
+
+$(SIZE_ACTUAL): $(TARGET)
+	@mkdir -p $(dir $@)
+	@$(SIZE) -A $(TARGET) \
+	  | grep -E '^($(SIZE_SECTIONS))[[:space:]]' \
+	  | awk '{ printf "%-10s %6d\n", $$1, $$2 }' \
+	  | LC_ALL=C sort > $@
+
+size-check: $(SIZE_ACTUAL)
+	@test -f $(SIZE_REF) || { \
+	  echo "no size reference at $(SIZE_REF)."; \
+	  echo "Create it with 'make size-accept' and commit it."; exit 1; }
+	@if diff -u $(SIZE_REF) $(SIZE_ACTUAL) > $(BUILD)/size.diff 2>&1; then \
+	  echo "size: matches $(SIZE_REF)"; \
+	else \
+	  echo "FAIL: section sizes drifted from $(SIZE_REF)"; \
+	  echo; sed '1,2d' $(BUILD)/size.diff; echo; \
+	  echo "If this change is intended, run 'make size-accept' and explain it"; \
+	  echo "in the commit message. If it is not, you have just found something."; \
+	  exit 1; \
+	fi
+
+size-accept: $(SIZE_ACTUAL)
+	@cp $(SIZE_ACTUAL) $(SIZE_REF)
+	@echo "size reference updated:"
+	@cat $(SIZE_REF)
+	@echo
+	@echo "This is a deliberate change. Say why in the commit message."
 
 # Interactive boot. Leave with Ctrl-A then X.
 run: $(TARGET)
@@ -142,6 +199,8 @@ measure:
 	@echo "toolchain: $$($(CC) -dumpversion), $$($(QEMU) --version | head -1)"
 	@echo
 	@$(SIZE) $(TARGET)
+	@echo
+	@$(MAKE) --no-print-directory size-check
 	@echo
 	@$(MAKE) --no-print-directory test
 
