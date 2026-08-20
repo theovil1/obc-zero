@@ -5,6 +5,119 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M0 revision: measurement convention, stack sizing, run termination
+
+**Measured commit:** `02058475c3636274fc4db1156280a890ced00840`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+This entry records a measurement of the commit above, not of itself. From now on
+a reference figure is only taken on a clean tree: `make measure` refuses to run
+when `git status --porcelain` is non-empty. A `-dirty` hash names a state nobody
+else can check out, which is worthless in a project whose claim is
+reproducibility. The banner keeps `git describe --always --dirty` because that
+is a build artefact, not a reference document.
+
+The figures in the M0 entry below were taken on a dirty tree under the old
+convention. They are superseded by this entry.
+
+### Two corrections to yesterday's conclusions
+
+Both were my errors, and both were checked rather than argued.
+
+**A RISC-V GDB is packaged; the host had the wrong one.** I concluded that no
+RISC-V GDB was available and that one would have to be built from source. Wrong
+inference. `gdb --configuration` reports
+`--host=x86_64-linux-gnu --target=x86_64-linux-gnu`: the *native* binary is
+x86-only. `gdb-multiarch` carries the RISC-V targets. The fix is an `apt
+install` and setting the architecture explicitly before `target remote`.
+
+**Semihosting gives an exit status without finisher hardware.** Verified rather
+than assumed: a minimal image issuing `SYS_EXIT_EXTENDED` with a parameter block
+of `{0x20026, 42}`, run under `-semihosting-config enable=on,target=native`,
+makes QEMU exit with status 42 immediately.
+
+```
+CODE DE SORTIE QEMU = 42
+```
+
+It is not used in the flight image and must never be. A call gate from firmware
+into the host is a clean exit path in emulation and a defect on a vehicle; if it
+is ever compiled in, it goes behind a test-only build flag that makes shipping
+it impossible rather than unlikely.
+
+### Stack sized from measurement
+
+The boot path peaks at **64 bytes**. Read back at run time by walking the
+`0xDEADBEEF` paint from `__stack_bottom`, and now reported on every banner
+rather than measured once and forgotten.
+
+The reservation was 4096 B, sixteen times more than anything observed, on a
+board with 16384 B in total. Reduced to 1024 B. RAM consumption falls from
+4096 B to 1024 B, returning 3072 B — nineteen percent of all the RAM in the
+system — to the budget, where M4's triple-redundant state is the intended
+beneficiary.
+
+Two things keep this honest going forward: the link script fails the build on
+RAM overflow, and the banner reports live high-water on every boot. Re-measure
+at M2 under scheduler load; 64 B is a boot-path figure, not a steady-state one.
+
+### Run termination fixed
+
+Runs were ending on a 10 s timeout because the firmware parks forever and
+`sifive_e` has no test finisher. The host now watches the serial stream and
+stops QEMU on the sentinel `boot   : ok`. The smoke test goes from **10 s to
+0.8 s**. The timeout survives as the failure path, which is what it should have
+been all along.
+
+This matters beyond convenience: M10 calls for 1000 consecutive runs. At the old
+cost that is just under three hours of waiting for timeouts. At the new one it
+is roughly thirteen minutes.
+
+### Measurements
+
+`make measure` on `0205847`:
+
+```
+   text    data     bss     dec     hex filename
+    826       0    1024    1850     73a build/obc.elf
+```
+
+```
+=== OBC-Zero ===
+build  : 0205847
+board  : sifive_e
+entry  : 0x2040008C
+ram    : 1024 B of 16384 B
+stack  : 64 B peak of 1024 B reserved
+boot   : ok
+```
+
+Flash is 826 B against a 4 MiB budget. RAM is 1024 B of 16384 B, 6.3 percent,
+down from 25 percent. Text shrank 12 B versus the previous build purely because
+the clean build hash is a shorter string than the dirty one; on this board even
+banner text is a measurable cost.
+
+### Also done
+
+`docs/BUDGET.md` written: the 16 KiB is now allocated across M2, M3, M4, M6, M7
+and M8 in advance, with a 3328 B reserve held back and assigned to nothing.
+Estimates other than the stack are unmeasured, and the reserve exists because
+M4 and M5 are exactly the kind of work that discovers a memory need late.
+
+Noted into M5: **the idle loop must never feed the watchdog.** A system whose
+tasks have all died would otherwise look healthy indefinitely. The feed is
+earned by tasks completing, not by the core being alive.
+
+### Carried into M9, to settle first
+
+The gdbstub attaches in wall-clock time, not instruction count. M9 requires
+injectors deterministic given a seed, but a host attaching after a wall-clock
+delay lands on a different instruction every run. Determinism needs a breakpoint
+on an instruction counter or a TCG plugin. **Decide at the start of M9**: it
+determines the architecture of `harness/faults/` and cannot be retrofitted.
+
+---
+
 ## 2026-08-20 — M0: scaffold and first boot
 
 **Outcome:** M0 complete. The image boots under QEMU and identifies itself.
@@ -51,6 +164,10 @@ Two toolchain findings:
 
 ### Measurements
 
+**Superseded by the entry above.** These were taken on a dirty tree, before the
+clean-tree measurement rule existed, so the hash below names nothing checkoutable.
+Kept because deleting a superseded measurement is how a logbook stops being one.
+
 `riscv64-unknown-elf-size build/obc.elf`, build `d668b4d1de0f-dirty`:
 
 ```
@@ -79,18 +196,15 @@ mask ROM jump target.
 
 ### Open points carried forward
 
-- **`make gdb` is only half usable.** No RISC-V GDB is packaged on this host:
-  neither `riscv64-unknown-elf-gdb` nor `gdb-multiarch` is installed, and the
-  native `gdb` does not know `riscv:rv32`. QEMU's gdbstub starts correctly, so
-  the target is not wrong, but nothing can attach to it yet. M9 needs the
-  gdbstub for fault injection, so this must be resolved before then.
-- **`make test` takes 10 s** because the firmware parks forever and the run is
-  ended by a timeout. Acceptable for one smoke test, not for the 1000-run
-  campaign of M10. The real fix is the host-side termination mechanism above.
+- ~~**`make gdb` is only half usable.** No RISC-V GDB is packaged on this
+  host.~~ **Wrong, corrected in the entry above.** `gdb-multiarch` carries the
+  RISC-V targets; only the *native* `gdb` binary is x86-only.
+- ~~**`make test` takes 10 s.**~~ **Fixed in the entry above**, 0.8 s via a
+  serial sentinel.
 - **The idle loop in `obc_main` is unbounded**, which sits against the "every
   loop has a provable bound" rule. An idle park is the intended exception, but
   it is the only one and should stay that way. M1 replaces it with the
-  scheduler idle path.
+  scheduler idle path, and M5 must ensure it never feeds the watchdog.
 - **`mtimecmp` and `mtime` offsets are assumed**, not verified. Standard SiFive
   layout puts them at `0x02004000` and `0x0200bff8` within the MTIMER region.
   Confirm against the machine at M1 before relying on them.

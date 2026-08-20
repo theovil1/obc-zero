@@ -68,14 +68,15 @@ this project fail at M8.
 2. The reserve is spent by explicit decision, never by drift.
 3. Anything that can live in flash lives in flash. Constant tables, lookup
    tables, and string literals belong in `.rodata`, which costs nothing here.
-   The flash budget is 4 MiB against 838 bytes used; RAM is the only scarce
+   The flash budget is 4 MiB against 826 bytes used; RAM is the only scarce
    resource on this board.
 4. No line may be met by making a buffer dynamic. There is no allocator and
    there will not be one.
 
 ## Current consumption
 
-Measured at M0. See `docs/LOGBOOK.md` for the run that produced these numbers.
+Measured on commit `0205847` by `make measure`. See `docs/LOGBOOK.md` for the
+run that produced these numbers.
 
 | | Bytes |
 |---|---:|
@@ -84,3 +85,5 @@ Measured at M0. See `docs/LOGBOOK.md` for the run that produced these numbers.
 | Stack reserved | 1024 |
 | Stack peak observed | 64 |
 | **Total committed** | **1024 of 16384** |
+
+Remaining unallocated after the planned lines above: 3328 B.
