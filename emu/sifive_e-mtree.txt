@@ -1,0 +1,30 @@
+# sifive_e memory map as instantiated by QEMU.
+#
+# This machine has no FDT, so the map is taken from the QEMU monitor
+# rather than from a device tree dump. Regenerate with:
+#
+#   printf 'info mtree\nquit\n' | qemu-system-riscv32 -machine sifive_e \
+#     -display none -serial null -monitor stdio -S
+#
+# QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
+
+address-space: memory
+  0000000000000000-ffffffffffffffff (prio 0, i/o): system
+    0000000000001000-0000000000002fff (prio 0, rom): riscv.sifive.e.mrom
+    0000000002000000-0000000002003fff (prio 0, i/o): riscv.aclint.swi
+    0000000002004000-000000000200bfff (prio 0, i/o): riscv.aclint.mtimer
+    000000000c000000-000000000fffffff (prio 0, i/o): riscv.sifive.plic
+    0000000010000000-000000001000014f (prio 0, i/o): riscv.sifive.e.aon
+    0000000010008000-0000000010008fff (prio 0, i/o): riscv.sifive.e.prci
+    0000000010012000-00000000100120ff (prio 0, i/o): sifive_soc.gpio
+    0000000010013000-000000001001301f (prio 0, i/o): riscv.sifive.uart
+    0000000010014000-0000000010014fff (prio -1000, i/o): riscv.sifive.e.qspi0
+    0000000010015000-0000000010015fff (prio -1000, i/o): riscv.sifive.e.pwm0
+    0000000010023000-000000001002301f (prio 0, i/o): riscv.sifive.uart
+    0000000010024000-0000000010024fff (prio -1000, i/o): riscv.sifive.e.qspi1
+    0000000010025000-0000000010025fff (prio -1000, i/o): riscv.sifive.e.pwm1
+    0000000010034000-0000000010034fff (prio -1000, i/o): riscv.sifive.e.qspi2
+    0000000010035000-0000000010035fff (prio -1000, i/o): riscv.sifive.e.pwm2
+    0000000020000000-000000003fffffff (prio 0, rom): riscv.sifive.e.xip
+    0000000080000000-0000000080003fff (prio 0, ram): riscv.sifive.e.ram
+
