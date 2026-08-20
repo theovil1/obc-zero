@@ -5,6 +5,142 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — Size guard, and the M1 platform facts
+
+**Measured commit:** `65b0d6714957e944fa8391e3dc0e7cac1c0c900f`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### The guard rail earned its place immediately
+
+Per-section sizes are now pinned in `docs/size-reference.txt` and compared on
+every `make measure`. Drift fails the build. Validated by breaking it first: a
+one-character edit to a banner string moved `.rodata` from 204 to 208 and was
+caught, then passed again on restore.
+
+Then it found something real, which is the whole argument for having it.
+
+`$(TARGET)` did not depend on the `Makefile`. Editing build flags therefore left
+a stale ELF in place, and the very first size reference was captured from a
+binary that no longer matched the source. The reference read 188 while the true
+figure was 196.
+
+Chasing that 8-byte gap exposed an **incomplete fix from earlier the same day**.
+Moving the build hash out of the mergeable string pool removed the dependency of
+image size on hash *content*. It did not remove the dependency on hash *length*:
+`976391f` is 7 characters and `976391f-dirty` is 13, and the padded difference
+is exactly 8 bytes. A `-dirty` build was larger than a clean one, so `size-check`
+would have failed spuriously on any uncommitted work.
+
+The hash is now padded to a fixed 20-character field. Held under experiment:
+
+| Build hash | `.rodata` | `.text` |
+|---|---:|---:|
+| `0205847` | 204 | 532 |
+| `976391f-dirty` | 204 | 532 |
+| `a` | 204 | 532 |
+| `v1.2.3-rc1-44-gdeadbee-dirty` | 204 | 532 |
+
+Identical across one character, thirteen, and one longer than the field itself.
+The banner now carries trailing spaces; that is the visible cost of a size that
+does not move.
+
+Proof the fix holds end to end: the reference was committed from a *dirty* build
+and matched exactly on the *clean* one at `65b0d67`. Under the old behaviour it
+could not have.
+
+The lesson is not about four bytes. I declared this fixed once already, and it
+was only half fixed. What caught the remainder was a mechanism that checks every
+time, not a second look.
+
+### Debugger: the write half, which is what M9 actually needs
+
+Reading a register proved the chain was alive. Fault injection needs to *write*.
+Verified against a running target, stopped at a breakpoint on `obc_main`:
+
+```
+--- read stack paint:
+0x80000000:	0xdeadbeef	0xdeadbeef
+--- write:
+0x80000000:	0x12345678	0xdeadbeef
+--- single bit flip:
+0x80000000:	0x12345678	0xdeadbeee
+--- register write:
+$1 = 0xcafe
+```
+
+Breakpoint on symbol, RAM read, RAM word write, single-bit flip, register write.
+Every primitive `harness/faults/` is specified to need. The remaining M9 question
+is unchanged and is about *when* an injection lands, not whether it can.
+
+### M1 platform facts, established before writing M1
+
+All four checked against the machine, in the same spirit as the reset vector.
+
+**`mtime` is at `0x0200BFF8`, `mtimecmp` at `0x02004000`, both writable.** ADR
+0001 previously flagged these as assumed from the standard SiFive layout. They
+are now verified, and the writability is what makes the carry test possible.
+
+**The timebase is 32768 Hz, not 10 MHz.** Measured against a host-timed
+interval: 32768 ticks elapse in 1.04 s wall clock including QEMU start-up. This
+is the FE310 low-frequency clock. The 10 MHz figure belongs to the `virt`
+machine, and I had carried it in my head from the earlier targeting discussion.
+Using it would have made every deadline wrong by a factor of 305, silently, with
+nothing failing. The acceptance criteria now assert the timebase so that a change
+of machine cannot rescale the system unnoticed.
+
+**The AON watchdog produces a real reset.** `wdogcfg.rsten` set, and the boot
+banner repeats. So "clean reboot" at M1 can mean an actual reset rather than a
+jump to `0x20400000`, which would re-run startup while leaving peripherals
+configured — a different event that must never be described as the same one.
+
+**The AON backup registers are not modelled.** Writing `0xA5A5A5A5` to
+`0x10000080` reads back `0x00000000`. The write is discarded. The place real
+hardware keeps a reset cause does not exist here.
+
+**RAM survives a warm reset; QEMU zeroes it at cold boot.** A sentinel written
+before a watchdog reset is still there afterwards:
+
+```
+BOOT noinit=0x00000000
+BOOT noinit=0xC0FFEE01  <== SURVIVED THE RESET
+```
+
+So persistence works, and the reset cause lives in RAM excluded from `.bss`
+zeroing. But the first line is the trap: QEMU gives a clean zero at cold boot
+where silicon gives garbage. An unprotected read looks correct here and fails on
+hardware. Magic *and* checksum are mandatory, and no test in emulation can
+justify dropping either — this is a case where the emulator is more forgiving
+than reality, which is the direction that hides defects rather than inventing
+them.
+
+### Acceptance criteria corrected before any test was written
+
+The M1 criterion "monotonic across 10 million ticks" could not catch the defect
+it appeared to guard. `mtime` is 64 bits read through two 32-bit accesses, and a
+naive read goes backwards on the low-word carry — which happens every 2^32
+ticks, once every 36 hours at 32768 Hz. Ten million ticks never reaches one.
+
+The criterion now provokes the carry by presetting `mtime` below the boundary,
+and the test must first be shown to fail against a deliberately naive read.
+Criteria added for the timebase and for rejecting a reset cause whose magic or
+checksum is wrong.
+
+### Measurement
+
+`make measure` on `65b0d67`:
+
+```
+   text    data     bss     dec     hex filename
+    874       0    1024    1898     76a build/obc.elf
+
+size: matches docs/size-reference.txt
+```
+
+Flash 874 B, up 16 B from 858 for the fixed-width hash field. RAM unchanged at
+1024 B of 16384 B. Stack peak unchanged at 64 B.
+
+---
+
 ## 2026-08-20 — Debugger chain verified end to end
 
 No commit is named here: this records a property of the development host, not a
