@@ -5,6 +5,87 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — Footprint was not a stable metric
+
+**Measured commit:** `578246b2e34910e75d70a888a4c1b11e16941079`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+Found while checking an unexplained 4-byte discrepancy between two builds. Worth
+the detour: the metric `docs/BUDGET.md` is built on was moving on its own.
+
+### What happened
+
+`58199cd` measured 830 B of text; its parent `0205847` measured 826 B. `58199cd`
+is a documentation-only commit — the source is byte-identical. A footprint that
+moves when no code changed is not a footprint.
+
+My first explanation was that the hashes were different lengths. They are both
+seven characters. Wrong, and worth stating plainly because it was written into
+this logbook before it was checked.
+
+### The actual cause
+
+Dumping `.rodata` for both builds showed the difference: the standalone `"\r\n"`
+literal exists as its own entry in one image and not in the other. Inside the
+mergeable string pool the linker tail-merges strings that are suffixes of longer
+ones, and whether that merge lands depends on the *content* of the strings
+present, not their length.
+
+Held under experiment, varying only the hash:
+
+| Build hash | `.text` | `.rodata` |
+|---|---:|---:|
+| `0205847` | 826 | 184 |
+| `58199cd` | 830 | 188 |
+| `aaaaaaa` | 830 | 188 |
+| `bbbbbbb` | 830 | 188 |
+| `zzzzzzz` | 830 | 188 |
+
+`0205847` is the outlier: it got a merge the others did not. The 826 B recorded
+as the M0 reference was a lucky hash, not a smaller program.
+
+### Fix
+
+The hash now lives in its own section instead of being concatenated into a
+string literal, so it never enters the mergeable pool. Verified across six
+different hashes, all producing an identical image size:
+
+```
+hash=0205847  text=858  rodata=188
+hash=58199cd  text=858  rodata=188
+hash=aaaaaaa  text=858  rodata=188
+hash=bbbbbbb  text=858  rodata=188
+hash=zzzzzzz  text=858  rodata=188
+hash=deadbee  text=858  rodata=188
+```
+
+Costs 28 B of flash against a 4 MiB budget, and buys a number that means
+something when compared across commits.
+
+### Measurement
+
+`make measure` on `578246b`:
+
+```
+   text    data     bss     dec     hex filename
+    858       0    1024    1882     75a build/obc.elf
+```
+
+RAM is unchanged at 1024 B of 16384 B; this was never a RAM issue. Flash is
+858 B, and that figure is now stable under a change of hash.
+
+### What this says about the rest
+
+Flash is not scarce here, so nobody would have chased 4 bytes for their own
+sake. The reason it mattered is that `docs/BUDGET.md` tracks consumption across
+milestones, and a metric with silent hash-dependent noise in it cannot support
+the claim that a milestone stayed within its line. RAM is the resource under
+real pressure, so the same question should be asked of it before M4 leans on
+these numbers: confirm that `.data` and `.bss` figures are stable under
+irrelevant changes, not merely small.
+
+---
+
 ## 2026-08-20 — M0 revision: measurement convention, stack sizing, run termination
 
 **Measured commit:** `02058475c3636274fc4db1156280a890ced00840`
@@ -93,9 +174,12 @@ boot   : ok
 ```
 
 Flash is 826 B against a 4 MiB budget. RAM is 1024 B of 16384 B, 6.3 percent,
-down from 25 percent. Text shrank 12 B versus the previous build purely because
-the clean build hash is a shorter string than the dirty one; on this board even
-banner text is a measurable cost.
+down from 25 percent.
+
+**Correction, same day.** I attributed the 12 B shrink to the clean build hash
+being a shorter string than the dirty one. That is wrong: both are seven
+characters. The real cause is linker string tail-merging, and it turned out to
+matter more than the number did. See the entry above dated the same day.
 
 ### Also done
 

@@ -68,14 +68,14 @@ this project fail at M8.
 2. The reserve is spent by explicit decision, never by drift.
 3. Anything that can live in flash lives in flash. Constant tables, lookup
    tables, and string literals belong in `.rodata`, which costs nothing here.
-   The flash budget is 4 MiB against 826 bytes used; RAM is the only scarce
+   The flash budget is 4 MiB against 858 bytes used; RAM is the only scarce
    resource on this board.
 4. No line may be met by making a buffer dynamic. There is no allocator and
    there will not be one.
 
 ## Current consumption
 
-Measured on commit `0205847` by `make measure`. See `docs/LOGBOOK.md` for the
+Measured on commit `578246b` by `make measure`. See `docs/LOGBOOK.md` for the
 run that produced these numbers.
 
 | | Bytes |
@@ -87,3 +87,8 @@ run that produced these numbers.
 | **Total committed** | **1024 of 16384** |
 
 Remaining unallocated after the planned lines above: 3328 B.
+
+A figure only belongs in this table once it is stable under changes that should
+not affect it. Flash footprint failed that test at M0 and was fixed; the same
+question has not yet been asked of `.data` and `.bss`, and should be before M4
+relies on them. See `docs/LOGBOOK.md`, entry "Footprint was not a stable metric".
