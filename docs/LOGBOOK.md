@@ -5,9 +5,57 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — History rewritten to correct the author identity
+
+No measurement here. Recorded because every commit hash in this file changed,
+and a reader finding shifted hashes with no explanation would be right to
+distrust the rest.
+
+All nine commits were authored with a private address. GitHub refuses a push
+carrying one, and the refusal arrives at push time rather than at commit time,
+so the problem surfaces long after it is created. Author and committer were
+rewritten to `288923546+theovil1@users.noreply.github.com`.
+
+**Content is untouched.** Every rewritten commit has a byte-identical tree to
+its original; the check was run pair by pair. Only author, committer and the
+hashes that follow from them changed. Measurements recorded against the old
+hashes remain valid, because they measured the build produced by that tree and
+the tree is the same.
+
+Three commit *messages* cited hashes of earlier commits, and rewriting would
+have left them pointing at commits that no longer exist. The rewrite was
+therefore redone as a single pass over the original history, translating those
+citations as it went, rather than as a rewrite followed by a patch-up. The
+mapping:
+
+| Before | After |
+|---|---|
+| `d668b4d` | `a196c30` |
+| `83fbe8b` | `ffbf6e0` |
+| `0205847` | `dc918ca` |
+| `58199cd` | `c79bf94` |
+| `578246b` | `3ca4ce4` |
+| `1d9ae85` | `85015a0` |
+| `976391f` | `4bb1da9` |
+| `65b0d67` | `9031860` |
+| `673b427` | `c0c746e` |
+
+References in this file and in ADR 0001 were remapped with the same table. One
+consequence worth stating plainly: the build-hash experiment in the entry below
+was run with the *pre-rewrite* strings, so the table there now shows the new
+hashes rather than the literal values passed on the command line. The lengths
+are the same, seven and thirteen characters, so the result it demonstrates is
+unaffected — but the strings shown are not the ones typed.
+
+Nothing had been pushed, so no published history was rewritten. Doing this after
+a push would have been a different matter entirely, and is the reason it was
+worth doing now rather than later.
+
+---
+
 ## 2026-08-20 — Size guard, and the M1 platform facts
 
-**Measured commit:** `65b0d6714957e944fa8391e3dc0e7cac1c0c900f`
+**Measured commit:** `9031860f2ea1bfbc486934c614f008e0dd730a29`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
 
 ### The guard rail earned its place immediately
@@ -27,7 +75,7 @@ figure was 196.
 Chasing that 8-byte gap exposed an **incomplete fix from earlier the same day**.
 Moving the build hash out of the mergeable string pool removed the dependency of
 image size on hash *content*. It did not remove the dependency on hash *length*:
-`976391f` is 7 characters and `976391f-dirty` is 13, and the padded difference
+`4bb1da9` is 7 characters and `4bb1da9-dirty` is 13, and the padded difference
 is exactly 8 bytes. A `-dirty` build was larger than a clean one, so `size-check`
 would have failed spuriously on any uncommitted work.
 
@@ -35,8 +83,8 @@ The hash is now padded to a fixed 20-character field. Held under experiment:
 
 | Build hash | `.rodata` | `.text` |
 |---|---:|---:|
-| `0205847` | 204 | 532 |
-| `976391f-dirty` | 204 | 532 |
+| `dc918ca` | 204 | 532 |
+| `4bb1da9-dirty` | 204 | 532 |
 | `a` | 204 | 532 |
 | `v1.2.3-rc1-44-gdeadbee-dirty` | 204 | 532 |
 
@@ -45,7 +93,7 @@ The banner now carries trailing spaces; that is the visible cost of a size that
 does not move.
 
 Proof the fix holds end to end: the reference was committed from a *dirty* build
-and matched exactly on the *clean* one at `65b0d67`. Under the old behaviour it
+and matched exactly on the *clean* one at `9031860`. Under the old behaviour it
 could not have.
 
 The lesson is not about four bytes. I declared this fixed once already, and it
@@ -127,7 +175,7 @@ checksum is wrong.
 
 ### Measurement
 
-`make measure` on `65b0d67`:
+`make measure` on `9031860`:
 
 ```
    text    data     bss     dec     hex filename
@@ -201,7 +249,7 @@ will need to tell "not listening yet" from "listening but wedged".
 
 ## 2026-08-20 — Footprint was not a stable metric
 
-**Measured commit:** `578246b2e34910e75d70a888a4c1b11e16941079`
+**Measured commit:** `3ca4ce4ce008c34e0894c46817d11844879a1b64`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
 
 Found while checking an unexplained 4-byte discrepancy between two builds. Worth
@@ -209,7 +257,7 @@ the detour: the metric `docs/BUDGET.md` is built on was moving on its own.
 
 ### What happened
 
-`58199cd` measured 830 B of text; its parent `0205847` measured 826 B. `58199cd`
+`c79bf94` measured 830 B of text; its parent `dc918ca` measured 826 B. `c79bf94`
 is a documentation-only commit — the source is byte-identical. A footprint that
 moves when no code changed is not a footprint.
 
@@ -229,13 +277,13 @@ Held under experiment, varying only the hash:
 
 | Build hash | `.text` | `.rodata` |
 |---|---:|---:|
-| `0205847` | 826 | 184 |
-| `58199cd` | 830 | 188 |
+| `dc918ca` | 826 | 184 |
+| `c79bf94` | 830 | 188 |
 | `aaaaaaa` | 830 | 188 |
 | `bbbbbbb` | 830 | 188 |
 | `zzzzzzz` | 830 | 188 |
 
-`0205847` is the outlier: it got a merge the others did not. The 826 B recorded
+`dc918ca` is the outlier: it got a merge the others did not. The 826 B recorded
 as the M0 reference was a lucky hash, not a smaller program.
 
 ### Fix
@@ -245,8 +293,8 @@ string literal, so it never enters the mergeable pool. Verified across six
 different hashes, all producing an identical image size:
 
 ```
-hash=0205847  text=858  rodata=188
-hash=58199cd  text=858  rodata=188
+hash=dc918ca  text=858  rodata=188
+hash=c79bf94  text=858  rodata=188
 hash=aaaaaaa  text=858  rodata=188
 hash=bbbbbbb  text=858  rodata=188
 hash=zzzzzzz  text=858  rodata=188
@@ -258,7 +306,7 @@ something when compared across commits.
 
 ### Measurement
 
-`make measure` on `578246b`:
+`make measure` on `3ca4ce4`:
 
 ```
    text    data     bss     dec     hex filename
@@ -282,7 +330,7 @@ irrelevant changes, not merely small.
 
 ## 2026-08-20 — M0 revision: measurement convention, stack sizing, run termination
 
-**Measured commit:** `02058475c3636274fc4db1156280a890ced00840`
+**Measured commit:** `dc918ca244fefd5e695f811aa5d13ffe1017432c`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
 
 This entry records a measurement of the commit above, not of itself. From now on
@@ -350,7 +398,7 @@ is roughly thirteen minutes.
 
 ### Measurements
 
-`make measure` on `0205847`:
+`make measure` on `dc918ca`:
 
 ```
    text    data     bss     dec     hex filename
@@ -359,7 +407,7 @@ is roughly thirteen minutes.
 
 ```
 === OBC-Zero ===
-build  : 0205847
+build  : dc918ca
 board  : sifive_e
 entry  : 0x2040008C
 ram    : 1024 B of 16384 B
@@ -446,7 +494,7 @@ Two toolchain findings:
 clean-tree measurement rule existed, so the hash below names nothing checkoutable.
 Kept because deleting a superseded measurement is how a logbook stops being one.
 
-`riscv64-unknown-elf-size build/obc.elf`, build `d668b4d1de0f-dirty`:
+`riscv64-unknown-elf-size build/obc.elf`, build `a196c30c6bce-dirty`:
 
 ```
    text    data     bss     dec     hex filename
@@ -461,7 +509,7 @@ consumed before a single feature exists.
 
 ```
 === OBC-Zero ===
-build  : d668b4d1de0f-dirty
+build  : a196c30c6bce-dirty
 board  : sifive_e
 entry  : 0x2040008C
 ram    : 4096 B of 16384 B

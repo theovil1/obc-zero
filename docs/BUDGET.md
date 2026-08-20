@@ -75,7 +75,7 @@ this project fail at M8.
 
 ## Current consumption
 
-Measured on commit `578246b` by `make measure`. See `docs/LOGBOOK.md` for the
+Measured on commit `3ca4ce4` by `make measure`. See `docs/LOGBOOK.md` for the
 run that produced these numbers.
 
 | | Bytes |
