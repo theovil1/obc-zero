@@ -5,6 +5,116 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — shift=6, and the two properties the old criterion conflated
+
+**Measured commit:** `a8acc02b4bf127dd87a3739528bf07cd520346a8`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### The old criterion was dominated, not merely hollow
+
+"Monotonic across 10 million ticks" is 305 guest seconds at 32768 Hz. A carry
+arrives every 2^32 ticks, once every 36 hours. So it could never cross a single
+carry — it was strictly weaker than the carry test written beside it, not just
+weak in isolation. Worth the distinction: a hollow criterion adds nothing, a
+dominated one also implies coverage it does not have.
+
+It was aiming at two different properties without naming either. Named and
+tested separately now.
+
+### `shift=0` was the wrong emulated CPU
+
+Chasing the soak arithmetic turned up something better. `shift=N` sets virtual
+time per instruction, so it sets the emulated CPU speed:
+
+| | `shift=0` | `shift=6` |
+|---|---|---|
+| Time per instruction | 1 ns | 64 ns |
+| Emulated CPU | 1000 MHz | **15.62 MHz** |
+| Real FE310 | 16 MHz | 16 MHz |
+| Host slowdown | ×161 | **×5** |
+| Determinism | yes (`dinstret=6006`) | yes (`dinstret=6006`) |
+
+`shift=0` modelled a 1 GHz core driving a 32768 Hz timer: 64x away from the
+target. Every M2 budget calibrated against it would have been 64x too generous
+relative to the clock, and would have needed recalibrating at the hardware port.
+It was also 32x slower for nothing. Caught before M2 rather than during it.
+
+A useful side effect: at `shift=0`, `mcycle` and `minstret` were both 6006,
+which invites reading one for the other. At `shift=6` they read 384384 and 6006,
+differing by exactly the shift. `minstret` is now visibly the instruction count.
+
+### Repeated carry propagation
+
+Ten crossings, high-word values 0, 1, 2, 255, 256, 65535, 65536, 2147483647,
+2147483648, 4294967294 — reaching byte, half-word and sign boundaries that ten
+consecutive values would never touch. All survived.
+
+One crossing per run, and the reason is a finding rather than a workaround.
+Chaining crossings inside one monitored sequence is impossible: after a crossing
+the counter sits just above the boundary, and bringing it back below for the
+next one is a forward jump of ~4.29e9 ticks, which the bounded-progression check
+correctly rejects as implausible. **The detector is strong enough to constrain
+how its own test can be built.** Attempting it anyway would have meant weakening
+the check to accommodate the test, which is the wrong direction.
+
+### Read stability
+
+```
+tick   : ok, max delta 0x00000000:0x00000001 ticks
+reads  : 1000000 covering 81788 ticks
+```
+
+A distinct property: a reader that slipped occasionally would survive any number
+of forced carries. Stated as reads and ticks, never rounded up into a duration —
+under `-icount` the relation between instructions, guest ticks and wall clock is
+a build parameter, so "stable for X seconds" is a claim this test cannot make.
+
+### The corollary that lands on M10
+
+Running everything under `-icount` means a long-duration claim is bounded by
+instructions, not elapsed time. Measured at `shift=6`, slowdown ×5:
+
+| Claim | Cost |
+|---|---|
+| 72 hours of **guest** time | ~360 host hours, 15 days |
+| 72 hours of **host** time | ~14.4 guest hours |
+
+At `shift=0` those rows read 14241 host hours and 21.8 guest minutes. Decided in
+ADR 0002 rather than left for the report: M10's soak is **guest** time, since a
+soak measures how long the flight software ran, not how long a workstation was
+busy. Running 72 host hours and calling it a 72-hour soak would overstate
+coverage fivefold and be indistinguishable in the report from the honest
+version.
+
+### What M1 does not prove, written down
+
+Drift against a reference clock — the counter is shown self-consistent, not
+correct. Timing behaviour on silicon — every figure is emulated and the
+CPU-to-timer ratio is a chosen parameter. 64-bit wraparound — ~17.8 million
+years away, will never be tested, and that is a decision rather than an
+oversight, which is why it is recorded as one.
+
+### Injection proof is now a general rule
+
+The three false-pass defects found yesterday are written into M9's scope rather
+than left as a local fix: every injector emits a positive assertion that the
+fault landed, and the run fails without it. A return code says the tool exited,
+not that anything was injected. A test reporting PASS on a fault that never
+happened is worse than no test, because it is counted as coverage.
+
+### Measurement
+
+`make measure` on `a8acc02`:
+
+```
+   text    data     bss     dec     hex filename
+   1446       0    1028    2474     9aa build/obc.elf
+```
+
+Flash 1446 B, up 92 B for the span reporting. RAM unchanged at 1028 B of 16384 B.
+
+---
+
 ## 2026-08-20 — M1, first part: the machine timer and a forced carry
 
 **Measured commit:** `0d47f56d5001a81473e2086862f489b254a4e626`
