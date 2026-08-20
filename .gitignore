@@ -1,0 +1,44 @@
+# --- Build output -----------------------------------------------------------
+build/
+*.o
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+*.lst
+*.map
+*.su
+
+# --- Run artefacts ----------------------------------------------------------
+# Captured serial output and campaign scratch data. Published campaign reports
+# live in docs/reports/ and are tracked; raw captures are not.
+*.log
+serial-*.txt
+harness/runs/
+docs/reports/**/raw/
+
+# --- Python host tooling ----------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Private planning -------------------------------------------------------
+# Strategy and execution planning are kept out of the public history. What the
+# project claims in public is stated in README.md and evidenced in docs/.
+ROADMAP.md
+PLAN.md
+BACKLOG.md
+docs/BACKLOG.md
+
+# --- Editor state -----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
