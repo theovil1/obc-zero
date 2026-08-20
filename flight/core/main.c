@@ -12,7 +12,27 @@
 #include <stdint.h>
 
 #include "core/status.h"
+#include "hal/mtime.h"
 #include "hal/uart.h"
+
+/*
+ * Clock plausibility bound.
+ *
+ * Two reads taken back to back cannot legitimately be a second apart, so any
+ * gap at or above one second of ticks means the clock is lying rather than
+ * running fast. The bound is derived from the measured timebase, not from a
+ * guessed constant, so a change of machine rescales it with everything else.
+ *
+ * This is deliberately not a monotonicity check. The dangerous naive read
+ * (low word then high word) returns a value about 2^32 too large at a carry,
+ * which is still strictly increasing: a monotonicity assertion passes on a
+ * clock that is off by thirty-six hours. Bounded progression does not.
+ */
+#define TICK_DELTA_MAX ((uint64_t)OBC_MTIME_HZ)
+
+/* Reads taken during the boot self-check. Small: this is a plausibility check
+ * at boot, not the continuous monitoring M5 will add. */
+#define TICK_CHECK_READS 64u
 
 /* Injected by the build. See BUILD_HASH in the Makefile. */
 #ifndef OBC_BUILD_HASH
@@ -106,9 +126,106 @@ static obc_status_t print_ram_usage(void)
     return obc_uart_puts(" B of 16384 B\r\n");
 }
 
+/*
+ * Boot clock self-check. Takes TICK_CHECK_READS successive readings and
+ * verifies that the counter advances without ever moving backwards and without
+ * ever jumping further than TICK_DELTA_MAX.
+ *
+ * Reports the largest gap observed, so a passing run still says how much margin
+ * it had rather than only that it passed.
+ */
+static obc_status_t check_tick_counter(uint64_t *max_delta_out)
+{
+    uint64_t previous;
+    uint64_t max_delta = 0u;
+    uint32_t i;
+    obc_status_t st;
+
+    st = obc_mtime_read(&previous);
+    if (st != OBC_OK) {
+        return st;
+    }
+
+    for (i = 0u; i < TICK_CHECK_READS; i++) {
+        uint64_t current;
+        uint64_t delta;
+
+        st = obc_mtime_read(&current);
+        if (st != OBC_OK) {
+            return st;
+        }
+
+        if (current < previous) {
+            *max_delta_out = previous - current;
+            return OBC_ERR_INVALID; /* went backwards */
+        }
+
+        delta = current - previous;
+        if (delta > max_delta) {
+            max_delta = delta;
+        }
+        if (delta >= TICK_DELTA_MAX) {
+            *max_delta_out = delta;
+            return OBC_ERR_UNSTABLE; /* jumped further than a clock can */
+        }
+
+        previous = current;
+    }
+
+    *max_delta_out = max_delta;
+    return OBC_OK;
+}
+
+static obc_status_t print_tick_check(void)
+{
+    uint64_t max_delta = 0u;
+    obc_status_t st = check_tick_counter(&max_delta);
+    obc_status_t w;
+
+    w = obc_uart_puts("tick   : ");
+    if (w != OBC_OK) {
+        return w;
+    }
+
+    if (st == OBC_OK) {
+        w = obc_uart_puts("ok, max delta ");
+    } else if (st == OBC_ERR_INVALID) {
+        w = obc_uart_puts("FAULT went backwards by ");
+    } else if (st == OBC_ERR_UNSTABLE) {
+        w = obc_uart_puts("FAULT implausible jump of ");
+    } else {
+        w = obc_uart_puts("FAULT unreadable, code ");
+    }
+    if (w != OBC_OK) {
+        return w;
+    }
+
+    /* The delta is 64-bit; report the high word too, since the whole point of
+     * the carry defect is that it lands there. */
+    w = obc_uart_put_hex32((uint32_t)(max_delta >> 32));
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_puts(":");
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_put_hex32((uint32_t)max_delta);
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_puts(" ticks\r\n");
+    if (w != OBC_OK) {
+        return w;
+    }
+
+    return st;
+}
+
 void obc_main(void)
 {
     obc_status_t st;
+    obc_status_t tick_st;
 
     obc_uart_init();
 
@@ -147,13 +264,22 @@ void obc_main(void)
         st = print_stack_usage();
     }
 
+    tick_st = print_tick_check();
+
     /*
      * Sentinel. This exact string is what the host watches for to decide that
      * the run has reached its end state; seeing it, the harness stops QEMU
      * rather than waiting out a timeout. Changing it breaks `make test`.
+     *
+     * A failed self-check still reaches an end state, and must still say so:
+     * a run that goes silent is indistinguishable from a hang, which would
+     * hide the very fault the check just found. The sentinel therefore reports
+     * the verdict rather than being withheld on failure.
      */
-    if (st == OBC_OK) {
+    if (st == OBC_OK && tick_st == OBC_OK) {
         (void)obc_uart_puts("boot   : ok\r\n");
+    } else {
+        (void)obc_uart_puts("boot   : FAULT\r\n");
     }
 
     /*

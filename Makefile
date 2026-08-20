@@ -59,7 +59,13 @@ SENTINEL := boot   : ok
 # Reaching it is a failure, not a normal end of run.
 RUN_TIMEOUT_S := 10
 
+# MTIME_SRC selects which machine-timer implementation is linked. The default is
+# the flight one; test-carry-broken swaps in a deliberately naive reader to prove
+# the carry test detects something. Must be defined before SRC_C uses it.
+MTIME_SRC ?= flight/hal/mtime.c
+
 SRC_C := flight/core/main.c \
+         $(MTIME_SRC) \
          flight/hal/uart.c
 SRC_S := flight/boot/start.S
 
@@ -95,7 +101,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test test-poisoned measure gdb attach size size-check size-accept clean
+.PHONY: all build run test test-poisoned test-carry test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -200,6 +206,67 @@ test: $(TARGET)
 	 grep -qF "build  : $(BUILD_HASH)" $(BUILD)/serial.log \
 	   || { echo "FAIL: build hash mismatch"; exit 1; }; \
 	 echo "PASS"
+
+# --- Forced mtime carry -------------------------------------------------------
+#
+# The 64-bit read race cannot be waited for: a carry happens once every 36 hours
+# at 32768 Hz, and under -icount the run is deterministic, so it either meets the
+# window or never does. Never would mean a permanently green test on a broken
+# clock. The carry is therefore forced through the gdbstub.
+#
+# Located from the CARRY-INJECT marker rather than hardcoded, so that editing
+# either implementation cannot silently move the injection point off the read.
+CARRY_LINE = $(MTIME_SRC):$(shell grep -n 'CARRY-INJECT' $(MTIME_SRC) | cut -d: -f1)
+
+# $(1) = expected sentinel, $(2) = human label
+define run_carry
+	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; \
+	 sleep 1; \
+	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$carry_line = "$(CARRY_LINE)"' \
+	   -x emu/carry.gdb > $(BUILD)/carry.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; \
+	   sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -E 'tick|boot' $(BUILD)/serial.log; \
+	 grep -qF 'CARRY-INJECTED' $(BUILD)/carry.log \
+	   || { echo "FAIL: the injection never happened, so this test proved nothing"; \
+	        cat $(BUILD)/carry.log; exit 1; }; \
+	 grep -qF "$(1)" $(BUILD)/serial.log \
+	   || { echo "FAIL: $(2)"; cat $(BUILD)/carry.log; exit 1; }
+endef
+
+# The flight reader must survive a carry landing between its two reads.
+test-carry: $(TARGET)
+	@echo "carry: forced mid-read carry, correct implementation"
+	$(call run_carry,boot   : ok,the flight reader did not survive a forced carry)
+	@echo "PASS"
+
+# Internal. Same run, opposite expectation: the reader under test must be caught.
+# Not called directly — it needs MTIME_SRC set, which is what test-carry-broken
+# arranges.
+test-carry-expect-fault: $(TARGET)
+	$(call run_carry,boot   : FAULT,the naive reader survived — the test detects nothing)
+
+# The naive reader must NOT survive the forced carry. If this passes, the test
+# is measuring nothing and every green run above is worthless.
+#
+# The whole run happens inside the sub-make, not just the build. Overriding
+# MTIME_SRC for the build alone left the parent still pointing the debugger at
+# the flight source, so the breakpoint resolved against a file absent from the
+# binary and the run hung instead of failing.
+test-carry-broken:
+	@echo "carry: forced mid-read carry, deliberately naive implementation"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory MTIME_SRC=emu/broken/mtime_naive.c \
+	    test-carry-expect-fault
+	@echo "PASS (the broken build was correctly rejected)"
+	@$(MAKE) --no-print-directory clean >/dev/null
 
 # --- Poisoned-RAM boot --------------------------------------------------------
 #

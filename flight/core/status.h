@@ -15,7 +15,11 @@
 typedef enum {
     OBC_OK = 0,
     OBC_ERR_TIMEOUT = 1,
-    OBC_ERR_INVALID = 2
+    OBC_ERR_INVALID = 2,
+    /* A value that should have settled within a bounded number of attempts did
+     * not. Distinct from OBC_ERR_TIMEOUT: nothing was waited for, a retry
+     * budget was exhausted. */
+    OBC_ERR_UNSTABLE = 3
 } obc_status_t;
 
 #endif /* OBC_STATUS_H */
