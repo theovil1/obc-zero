@@ -53,7 +53,8 @@ Point 4 is the product. Points 1 to 3 are table stakes.
 Ubuntu 24.04:
 
 ```bash
-sudo apt install gcc-riscv64-unknown-elf qemu-system-misc make python3-venv
+sudo apt install gcc-riscv64-unknown-elf qemu-system-riscv \
+                 device-tree-compiler gdb-multiarch make python3-venv
 git clone https://github.com/<user>/obc-zero.git
 cd obc-zero
 make build          # produces build/obc.elf

@@ -5,6 +5,64 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — Debugger chain verified end to end
+
+No commit is named here: this records a property of the development host, not a
+measurement of a built image, so the clean-tree measurement rule does not apply.
+
+### `gdb-multiarch` does carry RISC-V
+
+Its banner is actively misleading:
+
+```
+This GDB was configured as "x86_64-linux-gnu".
+...
+The target architecture is set to "riscv:rv32".
+```
+
+The first line names its *host*; the second shows the target accepted anyway.
+Reading the first line as a statement about targets is what sent me toward
+building a debugger from source, which was never necessary. There is no
+`riscv64-unknown-elf-gdb` in any apt package, and none is needed.
+
+### Attached and cross-validated the reset vector
+
+```
+0x00001004 in ?? ()
+pc             0x1004	0x1004
+=> 0x1004:	lui	t0,0x20400
+   0x1008:	jr	t0
+```
+
+Worth more than a connectivity check: this reproduces, through an independent
+tool, the reset vector ADR 0001 derives from the QEMU monitor. Two tools, same
+answer, so the foundation the link script rests on is not resting on one
+reading.
+
+### Two traps in the connection
+
+**Order matters.** `set architecture riscv:rv32` must precede `target remote`.
+On an already-attached target GDB auto-detects and falls back to its host
+architecture.
+
+**A missing QEMU reports a timeout, not a refusal.** Held under experiment:
+`:1234` and `localhost:1234` both succeed when QEMU is listening, and both
+produce the identical timeout message when it is not. The syntax is a red
+herring; the message simply does not say what it means. Recorded because it will
+be met again at M9, when the harness attaches to the stub thousands of times and
+will need to tell "not listening yet" from "listening but wedged".
+
+### Tooling corrections applied
+
+- `make gdb` documented as the half that starts QEMU; `make attach` added for
+  the half that connects.
+- `GDB` in the Makefile pointed at `gdb-multiarch` instead of a binary that
+  does not exist.
+- Toolchain list corrected: the RISC-V QEMU binaries are in `qemu-system-riscv`,
+  not `qemu-system-misc`, on Ubuntu 26.04.
+
+---
+
 ## 2026-08-20 — Footprint was not a stable metric
 
 **Measured commit:** `578246b2e34910e75d70a888a4c1b11e16941079`

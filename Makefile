@@ -8,7 +8,16 @@ CC      := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
 SIZE    := $(CROSS)size
-GDB     := $(CROSS)gdb
+
+# No riscv64-unknown-elf-gdb is packaged: neither gcc-riscv64-unknown-elf nor
+# binutils-riscv64-unknown-elf ships one, and no apt package provides it.
+# gdb-multiarch carries the RISC-V targets despite reporting itself as
+# "configured as x86_64-linux-gnu", which refers to its host, not its targets.
+GDB     := gdb-multiarch
+
+# The architecture must be set before connecting: on an already-attached target
+# GDB auto-detects and falls back to its host architecture.
+GDBFLAGS := -ex 'set architecture riscv:rv32' -ex 'target remote localhost:1234'
 
 QEMU    := qemu-system-riscv32
 MACHINE := sifive_e
@@ -66,7 +75,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test measure gdb size clean
+.PHONY: all build run test measure gdb attach size clean
 
 all: build
 
@@ -136,10 +145,16 @@ measure:
 	@echo
 	@$(MAKE) --no-print-directory test
 
-# Halted at reset with a gdbstub on :1234. In another shell:
-#   $(GDB) $(TARGET) -ex 'target remote :1234'
+# Halted at reset with a gdbstub on :1234. Start this first, then attach from
+# another shell with `make attach`. Connecting before QEMU is listening reports
+# a connection timeout rather than a refusal, which reads like a GDB fault and
+# is not one.
 gdb: $(TARGET)
 	$(QEMU) -machine $(MACHINE) -nographic -kernel $(TARGET) -s -S
+
+# Attach to a `make gdb` already running in another shell.
+attach: $(TARGET)
+	$(GDB) $(TARGET) $(GDBFLAGS)
 
 clean:
 	rm -rf $(BUILD)

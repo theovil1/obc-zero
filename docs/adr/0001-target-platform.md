@@ -121,12 +121,22 @@ in an emulated test that is a clean exit path, on a real vehicle it is a defect
 with no defensible purpose. The build must make it impossible to ship by
 accident, not merely unlikely.
 
-**A RISC-V capable GDB is packaged, the host simply has the wrong one.**
-`gdb-multiarch` includes the RISC-V targets. The native `gdb` reports
-`configure --host=x86_64-linux-gnu --target=x86_64-linux-gnu`, which is why it
-rejects `set architecture riscv:rv32`. The fix is `apt install gdb-multiarch`
-and setting the architecture explicitly before `target remote`; nothing needs to
-be built from source.
+**Debug with `gdb-multiarch`; there is no `riscv64-unknown-elf-gdb`.** No apt
+package provides one, and neither `gcc-riscv64-unknown-elf` nor
+`binutils-riscv64-unknown-elf` ships it. `gdb-multiarch` carries the RISC-V
+targets. Its banner reads `configured as "x86_64-linux-gnu"`, which names its
+*host*, not its targets, and is misleading enough to have sent one attempt down
+a build-from-source path that was never necessary.
+
+Verified end to end: attached to the gdbstub, GDB reports `pc = 0x1004` and
+disassembles the mask ROM to `lui t0,0x20400` / `jr t0` — independently
+reproducing, through a second tool, the reset vector this record derives from
+the QEMU monitor.
+
+`set architecture riscv:rv32` must come **before** `target remote`: on an
+already-attached target GDB auto-detects and falls back to the host
+architecture. Attaching before QEMU is listening reports a connection *timeout*
+rather than a refusal, which reads like a debugger fault and is not one.
 
 **The gdbstub attaches in wall-clock time, not instruction count.** This is the
 real constraint on M9, and it is sharper than the packaging question. M9 requires

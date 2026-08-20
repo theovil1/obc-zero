@@ -18,7 +18,8 @@ agreement. If you are unsure whether something is restricted, do not submit it.
 Ubuntu 24.04 or equivalent:
 
 ```bash
-sudo apt install gcc-riscv64-unknown-elf qemu-system-misc make python3-venv
+sudo apt install gcc-riscv64-unknown-elf qemu-system-riscv \
+                 device-tree-compiler gdb-multiarch make python3-venv
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ./harness[dev]
 make build && make test
