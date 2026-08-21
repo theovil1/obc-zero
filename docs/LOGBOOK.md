@@ -5,6 +5,40 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — The article's own opening was wrong, and my review did not catch it
+
+Not a measurement. A small thing worth the entry because of where it happened.
+
+The write-up opened by announcing five cases. The text contains eight. The number
+had been right once, drifted when a section was cut, and survived a full reread
+of the piece — a reread whose entire purpose was to check the text against
+itself.
+
+It was caught only because somebody asked me to verify something else about the
+same paragraph, and checking it meant counting.
+
+The uncomfortable part is the subject matter. The article's thesis is that a
+mechanism is rarely wrong in the direction it is examined, and that the direction
+that gets forgotten is the one requiring an effect to be *observed* rather than a
+problem to be absent. Reading a piece for coherence is exactly that kind of
+examination: it checks for things that look wrong, and a count that reads
+plausibly does not look wrong. Nothing in a careful read counts the sections.
+
+**Deliberately not put in the article.** It would be a neat closing flourish and
+it would cost more than it earns: a text arguing something serious about
+verification does not need to demonstrate its own cleverness, and a reader who
+notices the self-reference will trust the rest slightly less rather than more.
+
+What it changes here: the article is prose and has no equivalent of `size-check`.
+Every figure in the repository that must not drift silently is pinned against a
+generated reference. A word count, a section count, a claim of "five" — none of
+those are pinned, and a document is exactly the kind of artefact where an
+assertion drifts without any mechanism noticing. Nothing is being built for that
+today, and it is worth knowing which artefacts have a guard and which are being
+held together by attention.
+
+---
+
 ## 2026-08-21 — M5: three mechanisms that were correct and wrongly connected
 
 **Measured commit:** `fec788c906140ae0bff2dd227dd95006384bf725`

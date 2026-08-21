@@ -287,6 +287,17 @@ symmetric in the code even when they are symmetric in the design.
 
 **4. A measured cost is not a validated mechanism.**
 
+This is the general form of everything in group two, and it reaches further than
+the cases there. Group two is about mechanisms whose effect was absent. This is
+about every mechanism whose *presence* can be demonstrated while its *usefulness*
+never is — and fault tolerance is unusually full of those, because the whole
+field is built from machinery that is supposed to do nothing most of the time.
+
+A redundant copy that is never read from. A retry that never retries. An error
+path that has been executed only by the test that exists to execute it. Each of
+those can be measured, budgeted, reviewed and shipped without anyone establishing
+that it does the thing it is there for.
+
 The clearest case in this project is one I have *not* listed above, because it is
 not yet a defect: a periodic scrubber that walks redundant copies and repairs
 them. Its cost is measured — 221 instructions of a 3000-instruction budget — and
