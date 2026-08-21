@@ -178,14 +178,18 @@ def check_order(dump: Dump) -> list[str]:
 
     if len(dump.trace) != len(expected):
         return [
-            f"trace has {len(dump.trace)} dispatches, the table dictates "
-            f"{len(expected)}"
+            (
+                f"trace has {len(dump.trace)} dispatches, the table dictates "
+                f"{len(expected)}"
+            )
         ]
     for position, (got, want) in enumerate(zip(dump.trace, expected)):
         if got != want:
             return [
-                f"trace diverges at dispatch {position}: got task {got}, "
-                f"the table dictates task {want}"
+                (
+                    f"trace diverges at dispatch {position}: got task {got}, "
+                    f"the table dictates task {want}"
+                )
             ]
     return []
 
@@ -222,8 +226,7 @@ def compare_runs(first: Dump, second: Dump) -> list[str]:
         for position, (a, b) in enumerate(zip(first.trace, second.trace)):
             if a != b:
                 failures.append(
-                    f"dispatch sequences differ at position {position}: "
-                    f"{a} then {b}"
+                    f"dispatch sequences differ at position {position}: {a} then {b}"
                 )
                 break
         else:

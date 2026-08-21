@@ -88,6 +88,18 @@ typedef struct {
  * Written to RAM and read out by the host through the debugger. Emitting it
  * over the UART inside a dispatch would add instructions to the very count
  * being asserted.
+ *
+ * **This is flight code, not instrumentation**, and it is never compiled out.
+ * Gating it behind a build flag would mean the campaign measures an image with
+ * trace_push in the dispatch path while the vehicle flies one without it, which
+ * would make every published budget a figure about a different binary. See
+ * docs/adr/0004-trace-is-flight-code.md.
+ *
+ * **The linear shape is a placeholder.** A buffer that stops recording after
+ * OBC_TRACE_CAPACITY dispatches suits a bounded assertion window and is useless
+ * in flight, where it would fill within seconds and observe nothing for the rest
+ * of the mission. ADR 0004 commits it to becoming a ring with an explicit wrap
+ * counter, delivered with the event log at M8.
  */
 #define OBC_TRACE_CAPACITY 256u
 

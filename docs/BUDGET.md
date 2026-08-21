@@ -37,8 +37,15 @@ call depth M2 introduces. There is no recursion and no allocation anywhere in
 the flight code, so stack growth is bounded by call-graph depth alone and can be
 checked statically. Revisit at M2 with a measurement taken under scheduler load.
 
-**Scheduler, 384 B of 512 B.** Measured, not estimated. The trace buffer is
-256 B of it — one byte of task index per dispatch, sized to hold the 16-frame
+**Scheduler, 384 B of 512 B.** Measured, not estimated.
+
+The figures in this file are the **flight** figures: nothing measured here is
+compiled out of the image intended to fly. That was settled in ADR 0004 rather
+than assumed — gating the trace behind a build flag would have made every budget
+below a claim about a binary that never flies, so no second configuration is
+tracked and none is needed.
+
+The trace buffer is 256 B of it — one byte of task index per dispatch, sized to hold the 16-frame
 assertion window with room to spare. The task table itself costs nothing here:
 it is `const` and lives in flash, which also means a corrupted RAM word cannot
 turn a period into something else or redirect a function pointer. Only the
@@ -114,6 +121,10 @@ observed fact rather than a discovery.
 The alert threshold is one sixteenth of the region. It is not derived from
 anything: it is a round number chosen so that crossing it forces a conversation
 rather than passing unnoticed. Revise it with a reason, not with a shrug.
+
+M8 must either absorb the execution trace into the event log or explain why two
+independent records of what recently happened both deserve space; 16 KiB cannot
+afford the duplication. Recorded in ADR 0004 as a commitment, not a preference.
 
 M6, M7 and M8 each add tables and fixed-layout frames, all of which belong in
 `.rodata` and therefore in flash. Rule 3 below actively pushes data here, so the

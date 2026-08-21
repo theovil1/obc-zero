@@ -119,7 +119,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -410,6 +410,29 @@ test-sched-repro: $(TARGET)
 	$(call dump_trace,$(BUILD)/trace-b.txt)
 	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-a.txt $(BUILD)/trace-b.txt
 
+# --- Host code lint -----------------------------------------------------------
+#
+# The host code rules require harness/ to be ruff clean. A check that silently
+# skips when the tool is missing is worse than no check: the first machine
+# without ruff would wave unverified code through while printing green.
+#
+# **A missing verification tool is a failure, not an abstention.** Same principle
+# as deps-check, and the same reason: a discipline nobody can observe is not a
+# property.
+RUFF := .venv/bin/ruff
+
+lint:
+	@test -x $(RUFF) || { \
+	  echo "FAIL: $(RUFF) is missing, so harness/ cannot be shown clean."; \
+	  echo "This is a failure and not a skip: a check that quietly does nothing"; \
+	  echo "would let the first machine without the tool publish green results."; \
+	  echo; \
+	  echo "  python3 -m venv .venv && .venv/bin/pip install ruff"; \
+	  exit 1; }
+	@$(RUFF) check harness/
+	@$(RUFF) format --check harness/
+	@echo "lint: harness/ is clean"
+
 # --- Runtime dependency guard -------------------------------------------------
 #
 # The compiler emits calls the source never mentions: 64-bit division and shift
@@ -599,6 +622,7 @@ measure:
 	@echo
 	@$(MAKE) --no-print-directory size-check
 	@$(MAKE) --no-print-directory deps-check
+	@$(MAKE) --no-print-directory lint
 	@echo
 	@$(MAKE) --no-print-directory test
 
