@@ -85,10 +85,21 @@ from the target hardware. Every execution budget calibrated against it would be
 from scratch at the Phase 2 port. It is also 32 times slower in host time for no
 benefit. `shift=6` puts the emulated core within 2.4 % of the real part.
 
-One consequence is worth naming: under `shift=0`, `mcycle` and `minstret` were
-numerically equal, which invited reading one for the other. At `shift=6` they
-differ by exactly 64, so `minstret` is visibly the instruction count and
-`mcycle` visibly is not.
+One consequence is worth naming carefully, because the obvious phrasing ages
+badly. Under `shift=0`, `mcycle` and `minstret` were numerically equal, which
+invited reading one for the other. At `shift=6` they differ by exactly 64. The
+ambiguity is **displaced, not removed**.
+
+`mcycle` under `-icount` counts nanoseconds of virtual time: 6006 instructions
+at 64 ns each gives exactly 384384, which is what it reads. It is therefore a
+**1 GHz counter at every shift**, and the ratio of 64 is an artefact of the
+setting rather than a model of anything.
+
+**Never derive an IPC or a cycle-denominated budget from that ratio.** On a real
+FE310 the instructions-per-cycle figure is somewhere between 1 and 3, set by the
+pipeline; 64 is set by a command-line flag. Treating one as evidence of the
+other would produce a budget that is wrong by more than an order of magnitude
+and looks measured.
 
 **Two time domains, with separate and non-overlapping authority:**
 
@@ -154,6 +165,32 @@ of host time, a slowdown of ×5. So:
 At `shift=0` the same two rows would read 14241 host hours and 21.8 guest
 minutes. The choice of shift changes the arithmetic by a factor of 32, which is
 another reason it is fixed here rather than per-campaign.
+
+### The soak crosses a real carry, and that is its point
+
+At 32768 Hz the low word of `mtime` wraps every 2^32 / 32768 = 131072 s, which
+is **36.409 hours**. A 72-hour guest soak therefore crosses **exactly one
+natural carry** — the only carry in the entire project that is not injected by a
+debugger.
+
+That is worth more than "it ran for a long time". Every other carry result in
+this repository comes from a forced crossing, which validates the reader against
+a synthetic event. The soak validates it against the real one, in a running
+system, with everything else happening at the same time.
+
+Two numbers that follow, and constrain the design:
+
+- The second carry falls at **72.82 hours**, so 72 hours leaves only 0.82 hours
+  of margin. Trimming the soak still yields one crossing; extending it to
+  73 hours yields two.
+- Expressed in host time the crossing would be meaningless, because it depends
+  on the guest clock alone. This is a stronger argument for defining the soak in
+  guest time than the honesty argument, and it should be the one given first.
+
+**The soak telemetry must assert the crossing explicitly** — high word before
+and after, and the reader's verdict across it — rather than leaving it to be
+noticed afterwards. An event that occurs once per campaign and is not asserted
+is an event that will be missed.
 
 **Decision, binding on M10:** the 72-hour soak is **72 hours of guest time**,
 and the report states it in guest hours with the host cost recorded alongside.
