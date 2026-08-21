@@ -5,6 +5,120 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — M5: three mechanisms that were correct and wrongly connected
+
+**Measured commit:** `fec788c906140ae0bff2dd227dd95006384bf725`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+**Branch:** `feat/m5-watchdog`
+
+### The defects changed kind
+
+Every milestone before this produced implementation defects: a clobbered
+register, a stale ELF, a threshold beyond the reach of a run. M5 produced three
+defects of a different sort, and none of them is a bug in any line of code.
+
+| Defect | The code was | What was wrong |
+|---|---|---|
+| Watchdog fed by a task | correct | it depended on the thing it watched |
+| Count on the reset path | correct | it assumed a path had been taken |
+| Suspension at frame + 1 | correct | the task was not due then |
+
+**Three correct mechanisms, wrongly connected.** Every one of them passes the
+test you write naturally, because the code does what it says and the system
+behaves as designed — the failure is in the relationship between parts, which is
+where no single unit of code is at fault.
+
+That is a change of nature worth recording, because M6 through M8 add
+subsystems rather than primitives and will produce more of this kind, not less.
+Reviewing a function will not find them. What found all three was asking what
+happens when the *other* part fails.
+
+### A test broken by a fix, and how to tell it from a regression
+
+`test-loop` stopped passing, and the reason was that the fix worked.
+
+The looping variant starved a period-8 task. Once rung 1 withheld the task's
+next *due* frame instead of the next frame, that task was genuinely suspended,
+never got a second dispatch inside the window, and never reached rung 3. The
+loop stopped because the suspension started working.
+
+This is the one class of test failure a project must never handle by reflex, and
+it is also the one that looks most like a regression. The rule that separates
+them, stated so it is usable rather than admired:
+
+> **A test broken by a fix can be described in advance: which behaviour changed,
+> and why this test observed it. If that cannot be said before looking, it is a
+> regression — whatever intuition says.**
+
+Here it could be said in advance: rung 1 now withholds a dispatch that was
+previously not withheld, and `test-loop` observed the second overrun that
+withholding prevents. A new variant starves a period-1 task instead, which
+overruns in frame 0, is withheld in frame 1, and overruns again in frame 2.
+
+The reasoning is in the new variant's header, because "the test failed" and "the
+test failed because the fix works" are indistinguishable six months later unless
+somebody wrote the difference down.
+
+### The watchdog does not depend on what it watches
+
+Armed and fed from the frame loop, never from a task. A watchdog dispatched from
+the table is fed by, checked by and escalated by the same executive it is meant
+to be watching.
+
+Tested by hanging the **executive**, not a task: the program counter is parked in
+`obc_park_forever`, a genuine infinite loop in real flight code, and the AON
+backstop resets the machine with no software running at all.
+
+That test found the second defect. The short-boot count was incremented on the
+reset path — which never executes when the reset happens in hardware. A hung
+system looped and counted nothing, which is exactly the failure the protection
+exists for, arriving through the one door a software counter cannot cover.
+
+Counting is now a flag raised as early as the boot can raise it and lowered only
+on success. It measures the **absence of a success** rather than the taking of a
+path, so it covers deaths by any route including none. The uncounted window is
+the startup code before the first C statement, written down rather than left
+implicit.
+
+### "Lowered on success" is the definition that carries everything
+
+Eight complete frames, not the end of initialisation. A system that initialises
+perfectly and dies on its first frame would otherwise clear the streak every
+time and never trigger the protection — counting boots that *start* rather than
+boots that *work*.
+
+Eight is derived rather than chosen: it is the period of the slowest task, so
+every task has been dispatched at least once before a boot is called a success.
+A static assertion in `tasks.c` fails if the table gains a slower one, which is
+what makes the number defend itself later.
+
+### Ownership rather than patching
+
+Arming and disarming are paired around the window. The first version disarmed at
+the successful exit only, so every error path left the watchdog armed with
+nothing feeding it, and a run that failed for one reason reset for another — a
+harness renaming the fault.
+
+The rule underneath is better than the mechanism: **the executive owns the
+watchdog for exactly as long as it runs.** Stated that way it applies on its own
+to exits not yet written.
+
+### Measurement
+
+`make measure` on `fec788c`:
+
+```
+   text    data     bss     dec     hex filename
+   5966      16    1916    7898    1eda build/obc.elf
+```
+
+RAM 1932 B of 16384 B. Twelve targets green, including `test-wdt` — a hung
+executive is reset and the hardware reset is counted — and `test-loop`, which
+asserts the streak reaches its limit, safe mode is entered, and **no further
+reset happens after it**.
+
+---
+
 ## 2026-08-21 — The harness deleted evidence, and the false red is the worse lie
 
 **Campaign commit:** `775b3d7` — 1000 runs, seed 1, zero failures, 14m46s
