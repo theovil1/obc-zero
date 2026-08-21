@@ -5,6 +5,76 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — L'UART mesuré sur `8f67feb`, et deux défauts dans l'instrument
+
+Mesure sur l'arbre propre de `8f67feb`. La ligne M6 passe de 104 à 112 octets
+(deux octets de compteur d'abandons dans la trame, le reste en état).
+
+| | Valeur |
+|---|---:|
+| `.text` | 8166 |
+| `.bss` | 592 |
+| RAM totale | 2048 B sur 16384 |
+| Trame | 47 octets |
+| `task telemetry`, nominal | 1466 sur 3000 |
+| Allocation de retry | 256 scrutations |
+| Coût d'une scrutation | 5 instructions |
+| Marge : 1466 + 1280 = 2746 | sur 3000 |
+
+### La réserve n'en était pas une
+
+M6 avait livré avec une note de backlog : « le budget ne tient que parce que
+l'UART émulé ne bloque jamais ». C'était la mauvaise réponse. Un vert sur un
+chemin que l'émulateur ne peut pas exercer ne dit pas que le chemin va bien, il
+dit qu'il n'a pas été testé.
+
+Trois faits mesurés avant de décider quoi que ce soit :
+
+- la borne était de 100 000 scrutations **par octet**, donc un octet bloqué
+  pouvait coûter 400 000 instructions dans une tâche budgétée 3 000 ;
+- le budget mesuré est un artefact d'émulation. À 115200 bauds, une trame de 45
+  octets coûte **61 035 instructions** — vingt fois le budget, 12,5 % d'une frame
+  entière. Le 1466 ne mesure pas la télémétrie, il mesure un UART sans débit ;
+- le blocage n'est **pas injectable au registre** ici : QEMU modélise bien le
+  FIFO et pose le bit plein, mais le vide sur un bottom half qui tourne dès que
+  le vCPU repart. Mesuré au `stepi` : le bit est effacé après **une** instruction.
+
+### Deux défauts dans mon propre instrument
+
+Le premier stub comptait à rebours *dans* la boucle de scrutation, ajoutant cinq
+instructions à un corps qui en fait cinq. Le dispatch bloqué est passé à 3949
+pour 3000 de budget : dépassement, échelle d'escalade, **rung 3, machine
+réinitialisée**. C'est-à-dire exactement le résultat que le test existait pour
+interdire, produit par l'outil de mesure.
+
+Et le test annonçait PASS. Parce que j'avais asserté que l'abandon était compté
+et annoncé, et jamais que le système avait survécu. Deux boots dans le journal,
+personne ne regardait.
+
+Corrigé en choisissant la source d'état *hors* de la boucle : le corps redevient
+identique à celui du vol. Et le vérificateur compte désormais les bandeaux.
+
+### Ce que le test ne prouve pas, écrit noir sur blanc
+
+Le défaut réellement corrigé — l'allocation par octet — n'est pas distinguable
+par un port qui refuse en permanence : les deux émetteurs abandonnent au premier
+octet et coûtent pareil. Ils ne divergent que sur un port intermittent, que cette
+machine ne produit pas sans une instrumentation plus coûteuse que la mesure.
+
+Ce qui le contient est l'allocation unique déclarée hors de la boucle d'octets et
+l'assertion de compilation. C'est dit dans l'ADR et dans le Makefile, pour que
+personne ne lise la suite verte comme couvrant ça.
+
+### Une constante fausse pendant tout le temps où personne ne l'a redérivée
+
+Le coût de scrutation était noté 4 instructions. Il l'était, avec un compteur par
+octet que la boucle gardait déjà en registre. Une allocation partagée déplace le
+test d'épuisement dans le corps : cinq. J'avais reporté le 4 du désassemblage
+précédent. Même défaut que la constante de 100 000 que je remplaçais, un ordre de
+grandeur plus petit.
+
+---
+
 ## 2026-08-21 — M6 mesuré sur `4a35efc`, et le défaut n'était pas dans la télémétrie
 
 Mesure prise sur l'arbre propre de `4a35efc`, après le commit qui la produit.

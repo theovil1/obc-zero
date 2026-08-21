@@ -21,7 +21,7 @@ to the reserve, but exceeding a line requires changing this file and saying why.
 | Scheduler state and task table | M2 | 512 | 3.1 % | **In use**, 384 B measured |
 | Panic context and safe-mode state | M3 | 256 | 1.6 % | Planned |
 | Triple-redundant critical state | M4 | 3072 | 18.8 % | **In use**, 344 B measured |
-| Telemetry frames and sensor mocks | M6 | 2048 | 12.5 % | **In use**, 104 B measured |
+| Telemetry frames and sensor mocks | M6 | 2048 | 12.5 % | **In use**, 112 B measured |
 | Command queue | M7 | 2048 | 12.5 % | Planned |
 | Event log buffer | M8 | 4096 | 25.0 % | Planned |
 | **Unallocated reserve** | — | **3328** | **20.3 %** | Held |
@@ -88,8 +88,8 @@ M8 shows this is more than the write path needs, the surplus returns to reserve.
 
 **Telemetry, 2048 B.** Fixed-layout frames plus the mock sensor backend the
 harness drives. Frames are compile-time defined, so this line is knowable
-exactly at M6 rather than estimated — and it is: **104 B of the 2048**, measured
-on `4a35efc`.
+exactly at M6 rather than estimated — and it is: **112 B of the 2048**, measured
+on `8f67feb`.
 
 The 45-byte frame buffer is the bulk of it. The rest is the sequence counter, the
 sensor readings and flags, the per-sensor run lengths the stuck detector needs,
@@ -122,19 +122,19 @@ this project fail at M8.
 
 ## Current consumption
 
-Measured on commit `4a35efc` by `make measure`. See `docs/LOGBOOK.md` for the
+Measured on commit `8f67feb` by `make measure`. See `docs/LOGBOOK.md` for the
 run that produced these numbers.
 
 | | Bytes |
 |---|---:|
 | `.data` | 16 |
-| `.bss` | 584 |
+| `.bss` | 592 |
 | Stack reserved | 1024 |
 | Stack peak observed | 112 |
 | `.noinit` (fault, mode, boot records; sensor mock) | 68 |
 | `.critical0/1/2` | 24 |
 | `.critical_guard` | 320 |
-| **Total committed** | **2036 of 16384** |
+| **Total committed** | **2044 of 16384** |
 
 `.bss` covers the scheduler state and trace, the safe-mode mirrors, the
 suspension log and the telemetry subsystem. The guard is not state: it is the
