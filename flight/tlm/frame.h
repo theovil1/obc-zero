@@ -106,8 +106,21 @@ typedef struct {
 #define OBC_TLM_W_SUSPENSIONS 2u
 #define OBC_TLM_O_SUSPENSIONS (OBC_TLM_O_FAILED_VOTES + OBC_TLM_W_FAILED_VOTES)
 
+/*
+ * Frames this vehicle chose not to send, because the downlink would not take
+ * them. Published, because a frame that was not sent and a frame that did not
+ * arrive look identical from the ground and need different responses — ADR 0009,
+ * decision 3.
+ *
+ * Inserting it here moved every offset after it, which is what the chained
+ * macros are for, and the host needed no change at all because it reads the
+ * layout from the binary. That property paid for itself here.
+ */
+#define OBC_TLM_W_DROPS 2u
+#define OBC_TLM_O_DROPS (OBC_TLM_O_SUSPENSIONS + OBC_TLM_W_SUSPENSIONS)
+
 #define OBC_TLM_W_SHORT_BOOTS 1u
-#define OBC_TLM_O_SHORT_BOOTS (OBC_TLM_O_SUSPENSIONS + OBC_TLM_W_SUSPENSIONS)
+#define OBC_TLM_O_SHORT_BOOTS (OBC_TLM_O_DROPS + OBC_TLM_W_DROPS)
 
 #define OBC_TLM_W_MODE 1u
 #define OBC_TLM_O_MODE (OBC_TLM_O_SHORT_BOOTS + OBC_TLM_W_SHORT_BOOTS)
@@ -179,6 +192,16 @@ extern volatile uint32_t obc_tlm_seq;
 
 /* Rung-2 resets performed, kept for the report rather than for the frame. */
 extern volatile uint32_t obc_tlm_subsystem_resets;
+
+/*
+ * Frames abandoned because the downlink refused them, and how many in a row.
+ *
+ * Neither is cleared by a rung-2 subsystem reset. Rung 2 returns the subsystem's
+ * own state to a known value; erasing the record of why it was needed would
+ * leave a campaign with nothing to read.
+ */
+extern volatile uint32_t obc_tlm_drops;
+extern volatile uint32_t obc_tlm_drops_consecutive;
 
 /*
  * Audits the descriptor table against the frame it claims to describe: fields

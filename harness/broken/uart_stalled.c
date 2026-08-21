@@ -1,4 +1,33 @@
 /*
+ * DELIBERATELY MODIFIED. Not flight code. Never linked into a flight image.
+ *
+ * A copy of flight/hal/uart.c whose downlink reads its transmit status from a
+ * word the harness owns instead of from the device register.
+ *
+ * **Why a substitute and not a register injection.** QEMU's sifive_uart does
+ * model an eight-entry FIFO and does set the full bit — but it drains on a
+ * bottom half that runs the moment the vCPU resumes, so a bit set from the
+ * debugger is clear again after a single retired instruction. Measured with
+ * `stepi`; recorded in ADR 0009, fact 3.
+ *
+ * **Why the source is chosen outside the loop, and it is the whole point.** The
+ * first version of this stub tested the stall with a countdown *inside* the poll
+ * loop. That added about five instructions to a loop the flight build runs in
+ * four, so a stalled dispatch measured 3949 instructions instead of the 2528 the
+ * flight build pays — over its 3000 budget. The task overran, climbed the
+ * ladder, and reset the machine: the instrument pushed the system past the very
+ * threshold the test existed to prove it stayed under, and the test reported
+ * PASS because it never checked whether the system survived.
+ *
+ * Selecting the pointer once, before the loop, leaves the loop body identical to
+ * the flight build's — the same `lw`, the same branch, the same allowance
+ * arithmetic. A stalled dispatch then costs what a stalled dispatch costs.
+ *
+ * That also makes the poll cost measurable: with the port held full, the
+ * dispatch rises above nominal by exactly the allowance times the per-poll cost,
+ * which is the figure flight/core/tasks.c asserts against. The constant feeding a
+ * compile-time proof is checked by a run rather than believed.
+ *
  * SiFive UART, transmit only. Two ports, and they carry different things.
  *
  * Both base addresses come from the QEMU machine model
@@ -92,10 +121,25 @@ static void port_init(uint32_t base)
  * a whole sequence of bytes. That is the difference between a frame costing at
  * most one allowance and costing forty-five of them.
  */
+/*
+ * The downlink's status, when the harness is holding it. Set to
+ * UART_TXDATA_FULL to refuse, 0 to let go. .noinit so a reset does not silently
+ * release a stall a test is relying on.
+ */
+volatile uint32_t obc_uart_stall_status __attribute__((section(".noinit")));
+volatile uint32_t obc_uart_stall_active __attribute__((section(".noinit")));
+
 static obc_status_t port_putc(uint32_t base, uint8_t byte, uint32_t *allowance)
 {
+    /* STUB: chosen once, outside the loop, so the loop below is instruction for
+     * instruction the flight build's. */
+    const volatile uint32_t *status =
+        (base == UART1_BASE && obc_uart_stall_active != 0u)
+            ? &obc_uart_stall_status
+            : (const volatile uint32_t *)(uintptr_t)(base + UART_TXDATA);
+
     for (;;) {
-        if ((reg_read(base, UART_TXDATA) & UART_TXDATA_FULL) == 0u) {
+        if ((*status & UART_TXDATA_FULL) == 0u) {
             reg_write(base, UART_TXDATA, (uint32_t)byte);
             return OBC_OK;
         }

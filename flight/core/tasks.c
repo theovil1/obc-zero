@@ -21,6 +21,7 @@
 #include "core/recover.h"
 #include "core/sched.h"
 #include "core/status.h"
+#include "hal/uart.h"
 #include "tlm/frame.h"
 #include "tlm/sensor.h"
 
@@ -60,21 +61,32 @@
  * T1 is set from the measured worst dispatch — 1633 instructions to sample two
  * sensors and write 45 bytes — with margin, rather than from an estimate.
  *
- * **And it holds only because the emulated UART never stalls.** obc_uart_putc
- * retries a full FIFO up to UART_TX_RETRY_LIMIT times, so a single stalled byte
- * costs more instructions than this whole budget and the executive would call it
- * an overrun. Both halves are correct on their own: the UART bounds its wait,
- * the executive enforces its budget. Together they turn a congested downlink
- * into an escalation, and at rung 3 into a reset.
+ * **T1 is an emulation figure, and the silicon figure is twenty times larger.**
+ * QEMU's chardev accepts every byte the instant it is offered, so 1466 measures
+ * a UART with no baud rate. At the 115200 the driver configures, one byte is
+ * 1356 core instructions and a 45-byte frame is **61035** — 12.5 % of a whole
+ * frame, against a budget of 3000.
  *
- * Not resolved here, and not claimed to be. QEMU's chardev accepts every byte
- * immediately, so no campaign on this machine can exercise the path — which
- * means raising the budget to cover it would be tuning against a case nothing
- * can test. Recorded in ADR 0008 and in the backlog; the fix is a non-blocking
- * transmit path, which is a HAL change and not a telemetry one.
+ * The budget stays at the emulated figure because that is the machine the
+ * campaigns run on, and a budget no run can meet would make every campaign red
+ * for a reason no campaign can fix. It is labelled rather than trusted, so that
+ * nobody ports this and discovers the gap at integration.
+ *
+ * **What the port has to change is not this number.** Polling 61035 instructions
+ * inside a dispatch is not a budget that is too small, it is the wrong shape:
+ * the transmit has to become non-blocking, with the frame handed to a driver
+ * that drains it across frames. ADR 0009, decision 4.
  */
 #define T0_BUDGET 1000u
 #define T1_BUDGET 3000u
+
+/*
+ * The telemetry task's nominal cost — a dispatch in which the downlink never
+ * refuses — measured on this build and re-measured by every `make measure`
+ * through the max the executive reports. Named so the assertion below can reason
+ * about it instead of repeating a literal.
+ */
+#define T1_NOMINAL_INSTR 1466u
 #define T2_BUDGET 3000u
 #define T3_BUDGET 5000u
 
@@ -209,6 +221,33 @@ _Static_assert(T0_PERIOD <= OBC_HEALTHY_FRAMES && T1_PERIOD <= OBC_HEALTHY_FRAME
                    && T2_PERIOD <= OBC_HEALTHY_FRAMES
                    && T3_PERIOD <= OBC_HEALTHY_FRAMES,
                "a boot would be called healthy before every task had run once");
+
+/*
+ * The emission's retry allowance has to fit inside the budget that governs it,
+ * with the task's nominal work already paid for.
+ *
+ * This is the assertion the previous version of the UART had no equivalent of.
+ * Its bound was 100000 polls per byte — a number unrelated to any budget, in a
+ * loop inside a budgeted task — and nothing anywhere could notice. See
+ * docs/adr/0009-emission-under-refusal.md.
+ *
+ * Three measured figures meet here: the budget, the nominal dispatch cost, and
+ * the cost of one poll taken from the disassembly. Move any of them until they
+ * no longer fit and this fails at build time.
+ */
+_Static_assert(T1_NOMINAL_INSTR
+                       + (OBC_UART_TX_RETRY_TOTAL * OBC_UART_TX_POLL_INSTR)
+                   <= T1_BUDGET,
+               "a stalled downlink would overrun the telemetry budget, so the "
+               "emission could reset the machine over a congested link");
+
+/*
+ * And the nominal cost must itself be inside the budget, which is not implied by
+ * the above the day someone raises the allowance and lowers the nominal figure
+ * to make it fit.
+ */
+_Static_assert(T1_NOMINAL_INSTR < T1_BUDGET,
+               "the telemetry task's measured cost does not fit its own budget");
 
 /* Every period must divide the window exactly, or the expected count is not an
  * integer and the conformance assertion would need a tolerance. */

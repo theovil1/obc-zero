@@ -58,12 +58,20 @@ def check_frames_present(frames: list[Frame], least: int) -> None:
 
 
 def check_sequence(frames: list[Frame]) -> int:
-    """Sequence numbers advance by one, except where a rung-2 reset returns them
-    to zero.
+    """Sequence numbers advance by one, except for two accounted-for breaks.
 
-    Returns the number of resets observed. ADR 0008 chose to break monotonicity
-    deliberately so that a subsystem reset is visible in the frame itself; this
-    is the assertion that the break is a reset and not a lost frame.
+    A rung-2 subsystem reset returns the sequence to zero — ADR 0008 broke
+    monotonicity deliberately so the reset is visible in the frame itself.
+
+    A frame the vehicle *chose* not to send also leaves a gap, and this is where
+    the two possible meanings of a gap have to be separated. From the ground, a
+    frame that was dropped at the source and a frame that was lost on the link
+    look identical, and they need different responses. ADR 0009 publishes a drop
+    counter for exactly this: **a gap of k is accounted for only if
+    ``frames_dropped`` rose by exactly k across it.** Anything else was lost, and
+    is a defect rather than a decision.
+
+    Returns the number of subsystem resets observed.
     """
     resets = 0
     for previous, current in pairwise(frames):
@@ -74,9 +82,17 @@ def check_sequence(frames: list[Frame]) -> int:
         if after == 0:
             resets += 1
             continue
+
+        gap = after - before - 1
+        dropped = int(current.values["frames_dropped"]) - int(
+            previous.values["frames_dropped"]
+        )
+        if gap > 0 and dropped == gap:
+            continue
         raise CheckFailed(
-            f"sequence jumped {before} -> {after} at byte {current.offset}: "
-            "neither the next frame nor a subsystem reset, so a frame was lost"
+            f"sequence jumped {before} -> {after} at byte {current.offset}, a gap "
+            f"of {gap}, but the drop counter moved by {dropped}: the vehicle did "
+            "not account for those frames, so they were lost rather than shed"
         )
     return resets
 

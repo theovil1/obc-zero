@@ -77,6 +77,11 @@ SCHED_SRC ?= flight/core/sched.c
 # The telemetry sources, selectable one at a time so a broken variant replaces
 # exactly the thing under test. A single TLM_SRC would mean swapping the sensor
 # validator also swapped the frame packer, and a failure could not be attributed.
+# UART_SRC selects the serial HAL. test-uart-stall swaps in one whose downlink
+# reports itself full for a chosen number of polls, because QEMU's device cannot
+# hold a stall for longer than a single retired instruction.
+UART_SRC ?= flight/hal/uart.c
+
 TLM_FRAME_SRC ?= flight/tlm/frame.c
 TLM_SENSOR_SRC ?= flight/tlm/sensor.c
 TLM_SRC := $(TLM_FRAME_SRC) $(TLM_SENSOR_SRC)
@@ -103,7 +108,7 @@ SRC_C := flight/core/main.c \
          flight/core/fault.c \
          $(MTIME_SRC) \
          $(TLM_SRC) \
-         flight/hal/uart.c
+         $(UART_SRC)
 SRC_S := flight/boot/start.S \
          flight/boot/trap.S
 
@@ -1068,3 +1073,117 @@ test-rung2-reachable: $(TARGET)
 
 test-tlm-all: test-tlm test-tlm-sensors test-rung2-reachable test-tlm-blind-broken \
               test-tlm-paranoid-broken test-tlm-layout-broken
+
+# --- The downlink refuses -------------------------------------------------- #
+#
+# The reservation M6 shipped with, turned into a test. It was recorded as a
+# backlog item, and recording it was the wrong response: a green result on a path
+# the emulator cannot exercise does not say the path is fine, it says the path
+# was not tested.
+#
+# Two runs of one image, with the downlink refusing and not, and the assertion is
+# the difference between them:
+#
+#     stalled - nominal  >=  allowance x poll cost      and   over == 0
+#
+# A bracket, from both sides, and neither side is a tolerance. The floor proves
+# the retries are spent rather than declared — a build giving up on the first
+# refusal shows no difference at all. The ceiling is the executive's own overrun
+# count, which is the budget the task is judged against, applied by the thing that
+# judges it and decides whether the ladder gets climbed.
+#
+# A lower bound and not an equality, because the two paths differ in more than
+# their polling: the refused one announces the drop and skips forty-five byte
+# writes, and predicting the net of those would be predicting the compiler.
+#
+# A *difference* rather than an absolute figure, because the substitute adds
+# instructions outside the poll loop that the flight build does not pay. Taking
+# both runs through the same image cancels them.
+#
+# **And the run must boot exactly once.** The first version of this target did
+# not check that, and the run it passed had climbed the ladder to rung 3 and reset
+# the machine over a congested downlink — the one outcome ADR 0009 exists to
+# prevent, happening while the test reported PASS.
+uart-stall-build:
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory UART_SRC=harness/broken/uart_stalled.c \
+	   build >/dev/null 2>&1
+	@grep -qF 'uart_stalled' $(BUILD)/obc.map \
+	  || { echo "FAIL: the stalling UART is not in the image, so every case below"; \
+	       echo "      would run against the flight port and prove nothing"; exit 1; }
+
+# One run of the already-built stub. $(STALL_ON) says whether the port refuses.
+uart-stall-one:
+	@rm -f $(CONSOLE_LOG) $(DOWNLINK_BIN) $(BUILD)/stall.log
+	@touch $(CONSOLE_LOG) $(DOWNLINK_BIN)
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 timeout 60 $(GDB) $(TARGET) -batch -nx \
+	   -ex 'set $$stall_on = $(STALL_ON)' \
+	   -x harness/faults/uart_stall.gdb > $(BUILD)/stall.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(CONSOLE_LOG) 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null
+	@grep -qF 'UART-STALL-SET' $(BUILD)/stall.log \
+	  || { echo "FAIL: the injector never ran, so this proved nothing"; \
+	       tail -5 $(BUILD)/stall.log; exit 1; }
+
+# A downlink emitter that gives up on the first refusal instead of waiting.
+#
+# The target that makes test-uart-stall mean something. Every behavioural
+# assertion passes against this build — shed, counted, announced, inside budget,
+# one boot — because giving up instantly does all of those, cheaply. Only the
+# cost floor catches it, and the frames it costs are frames that did not need to
+# be lost.
+#
+# **The per-byte allowance, which is the defect ADR 0009 actually closed, is not
+# testable this way and is not claimed to be.** With the port refusing from the
+# first byte, a per-byte emitter abandons exactly as early as a per-frame one and
+# costs the same; they diverge only on a port that refuses intermittently, which
+# this machine cannot produce without instrumentation that costs more than the
+# thing being measured. What contains it is the single allowance declared outside
+# the byte loop — visible in the disassembly as one `li a4,256` hoisted above it —
+# and the compile-time assertion in flight/core/tasks.c. Said here rather than
+# left for someone to assume the suite covers it.
+test-uart-impatient:
+	@echo "an emitter that gives up instead of waiting"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory UART_SRC=harness/broken/uart_impatient.c \
+	   build >/dev/null 2>&1
+	@grep -qF 'uart_impatient' $(BUILD)/obc.map \
+	  || { echo "FAIL: the broken UART is not in the image"; exit 1; }
+	@$(MAKE) --no-print-directory STALL_ON=0 uart-stall-one
+	@$(PY) harness/runner/stall_check.py --elf $(TARGET) --capture $(DOWNLINK_BIN) \
+	    --console $(CONSOLE_LOG) --record-cost $(BUILD)/stall-nominal.txt
+	@$(MAKE) --no-print-directory STALL_ON=1 uart-stall-one
+	@if $(PY) harness/runner/stall_check.py --elf $(TARGET) \
+	     --capture $(DOWNLINK_BIN) --console $(CONSOLE_LOG) --one-boot \
+	     --no-overrun --expect-drops --nominal-cost $(BUILD)/stall-nominal.txt \
+	     > $(BUILD)/impatient.txt 2>&1; then \
+	   echo "FAIL: an emitter that never waits passed every check, so the floor"; \
+	   echo "      is not doing any work and the retries are unproven"; \
+	   $(MAKE) --no-print-directory clean >/dev/null; exit 1; \
+	 fi
+	@grep -F 'STALL-CHECK FAIL' $(BUILD)/impatient.txt | sed 's/^/    /' | cut -c1-100
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@echo "PASS (refused, as it must)"
+
+test-uart-stall:
+	@echo "downlink refusal: the frame is shed, never the system"
+	@$(MAKE) --no-print-directory uart-stall-build
+	@printf "  port accepting  "
+	@$(MAKE) --no-print-directory STALL_ON=0 uart-stall-one
+	@cp $(CONSOLE_LOG) $(BUILD)/stall-console-off.log
+	@$(PY) harness/runner/stall_check.py --elf $(TARGET) \
+	    --capture $(DOWNLINK_BIN) --console $(CONSOLE_LOG) --one-boot \
+	    --record-cost $(BUILD)/stall-nominal.txt
+	@printf "  port refusing   "
+	@$(MAKE) --no-print-directory STALL_ON=1 uart-stall-one
+	@$(PY) harness/runner/stall_check.py --elf $(TARGET) \
+	    --capture $(DOWNLINK_BIN) --console $(CONSOLE_LOG) --one-boot \
+	    --no-overrun --expect-drops --nominal-cost $(BUILD)/stall-nominal.txt
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@echo "PASS"

@@ -22,6 +22,8 @@
 volatile uint8_t obc_tlm_frame[OBC_TLM_FRAME_LEN];
 volatile uint32_t obc_tlm_seq;
 volatile uint32_t obc_tlm_subsystem_resets;
+volatile uint32_t obc_tlm_drops;
+volatile uint32_t obc_tlm_drops_consecutive;
 
 /*
  * Set only by a descriptor audit that passed.
@@ -61,6 +63,8 @@ OBC_TLM_KEEP const obc_tlm_field_t obc_tlm_fields[] = {
       OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
     { "suspensions", OBC_TLM_O_SUSPENSIONS, OBC_TLM_W_SUSPENSIONS, 1u,
       OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
+    { "frames_dropped", OBC_TLM_O_DROPS, OBC_TLM_W_DROPS, 1u, OBC_TLM_KIND_COUNT,
+      { 0, 0, 0 } },
     { "short_boots", OBC_TLM_O_SHORT_BOOTS, OBC_TLM_W_SHORT_BOOTS, 1u,
       OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
     { "mode", OBC_TLM_O_MODE, OBC_TLM_W_MODE, 1u, OBC_TLM_KIND_ENUM, { 0, 0, 0 } },
@@ -265,6 +269,7 @@ obc_status_t obc_tlm_emit(void)
     put_u16(OBC_TLM_O_REPAIRS, sat16(obc_critical_repairs));
     put_u16(OBC_TLM_O_FAILED_VOTES, sat16(obc_critical_failed_votes));
     put_u16(OBC_TLM_O_SUSPENSIONS, sat16(obc_suspension_count));
+    put_u16(OBC_TLM_O_DROPS, sat16(obc_tlm_drops));
     put_u8(OBC_TLM_O_SHORT_BOOTS, sat8(obc_recover_short_boots()));
 
     /*
@@ -298,8 +303,23 @@ obc_status_t obc_tlm_emit(void)
         obc_status_t w = obc_uart_downlink_write(obc_tlm_frame, OBC_TLM_FRAME_LEN);
 
         if (w != OBC_OK) {
+            /*
+             * The frame is shed, and the fact is recorded. ADR 0009: a subsystem
+             * whose purpose is observability loses its data rather than the
+             * system. Spending the budget here would overrun, climb the ladder,
+             * and reset a machine whose only problem is that nobody is draining
+             * its downlink — and the reset would not drain it.
+             *
+             * The announcement goes to the console, which is the one channel
+             * that does not depend on the thing that just failed. Its status is
+             * discarded because there is nowhere left after it.
+             */
+            obc_tlm_drops++;
+            obc_tlm_drops_consecutive++;
+            OBC_IGNORE(obc_uart_puts("tlm    : downlink refused, frame dropped\r\n"));
             return w;
         }
+        obc_tlm_drops_consecutive = 0u;
     }
 
     return st;
