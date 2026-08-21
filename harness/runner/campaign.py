@@ -282,6 +282,7 @@ def write_report(
     elapsed: float,
     commit: str,
     provenance: str = "measured",
+    timing_basis: str = "emulated",
 ) -> None:
     """A report that names its seed, because one that does not is an anecdote.
 
@@ -289,6 +290,15 @@ def write_report(
     reader that is not a person can see it. The day campaigns are aggregated, a
     reconstructed report must not be counted as a fresh measurement, and a
     paragraph explaining that would be invisible to whatever does the counting.
+
+    ``timing_basis`` is there for the same reason and it is the newer of the two.
+    Every instruction figure this project publishes was taken on an emulator that
+    is measurably kinder than the silicon — a UART with no baud rate, no cache,
+    no flash wait states — and the difference reaches twenty-fold on the
+    telemetry budget. A reader aggregating budgets must be able to tell an
+    emulated figure from a hardware one without reading prose, and today every
+    figure is emulated. The field exists so that the day one is not, the
+    distinction is already carried rather than retrofitted.
     """
     lines = [
         f"# Voter campaign, {total} randomised corruptions",
@@ -296,6 +306,10 @@ def write_report(
         f"- **Date:** {time.strftime('%Y-%m-%d')}",
         f"- **Commit:** `{commit}`",
         f"- **Provenance:** `{provenance}`",
+        (
+            f"- **Timing basis:** `{timing_basis}` — instruction and timing "
+            "figures do not transfer to hardware; see docs/EMULATION-GAP.md"
+        ),
         f"- **Seed:** `{seed}` — the campaign replays exactly from this alone",
         f"- **Runs:** {total}",
         f"- **Failures:** {len(tally.failures)}",
