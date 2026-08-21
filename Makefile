@@ -144,7 +144,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check lint test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint guard-check test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -168,6 +168,71 @@ $(BUILD)/%.o: %.S Makefile
 
 size: $(TARGET)
 	@$(SIZE) $(TARGET)
+
+# --- Survival guard ---------------------------------------------------------
+#
+# **Every automated run asserts that the system survived it.**
+#
+# This exists because of a run that reset the machine twice while its test
+# reported PASS. The test exercised a degradation path — a refused downlink — and
+# asserted everything about the path: the frame was shed, the drop was counted,
+# the announcement went out. It never asserted that the vehicle was still there
+# afterwards, and two reset banners sat in the log with nothing looking at them.
+#
+# That is this repository's own bidirectional rule turning on it. The effect was
+# observed; the *absence of unwanted effects* was not. And it is the one defect
+# here that nothing would have caught except by accident, because every
+# individual assertion was correct.
+#
+# So the count is not something each test remembers to check. It is a declaration
+# every run must make, and a run that boots more often than its test declared is
+# a failure whatever else passed.
+#
+# $(1) = fewest boots allowed, $(2) = most, $(3) = the console log
+#
+# A range rather than a number because two tests legitimately loop: a hardware
+# watchdog reset and a reset-loop escalation do not produce a fixed count. A
+# range is still a declaration — it says what the test expects to survive — and
+# a range that spans everything is the same as no guard, so it is written
+# narrowly and the reason is given at the call site.
+define assert_boots
+	@boots=$$(grep -c '=== OBC-Zero ===' $(3) 2>/dev/null || true); \
+	 boots=$${boots:-0}; \
+	 if [ "$$boots" -lt "$(1)" ] || [ "$$boots" -gt "$(2)" ]; then \
+	   echo ""; \
+	   echo "FAIL: the run booted $$boots times; this test declares $(1)..$(2)."; \
+	   echo "A reset the test did not declare is a failure whatever else passed:"; \
+	   echo "the path under test may be correct and the system still gone."; \
+	   grep -nE '=== OBC-Zero ===|recover: rung|reset  :' $(3) 2>/dev/null \
+	     | sed 's/^/    /' | head -12; \
+	   exit 1; \
+	 fi
+endef
+
+# The guard is only a default if it cannot be forgotten.
+#
+# Every automated run — every $(QEMU) launched with -display none — must be
+# followed by a declaration. Counted here rather than trusted, on the same
+# principle as deps-check: a control nobody can skip is worth more than one
+# everybody remembers.
+#
+# `make run` and `make gdb` are exempt and are the only two: they are
+# interactive, they write no console log, and a person is watching.
+#
+# Both counts are anchored on recipe lines — a leading tab — because the first
+# version counted the patterns inside its own recipe and reported 17 runs against
+# 15. A control that matches its own text is a control measuring itself.
+guard-check:
+	@runs=$$(awk '/^\t.*\$$\(QEMU\).* -display none/ {n++} END{print n+0}' Makefile); \
+	 guards=$$(awk '/^\t\$$\(call assert_boots,/ {n++} END{print n+0}' Makefile); \
+	 if [ "$$runs" != "$$guards" ]; then \
+	   echo "FAIL: $$runs automated runs, $$guards survival declarations."; \
+	   echo "A run with no declaration cannot fail when the system does not"; \
+	   echo "survive it, which is how a test came to report PASS across two"; \
+	   echo "machine resets. Add a \$$(call assert_boots,MIN,MAX,LOG) after it."; \
+	   exit 1; \
+	 fi; \
+	 echo "guard: $$runs automated runs, each declaring what it expects to survive"
 
 # --- Pinned reference ---------------------------------------------------------
 #
@@ -284,6 +349,8 @@ test: $(TARGET)
 	 grep -qF "build  : $(BUILD_HASH)" $(BUILD)/serial.log \
 	   || { echo "FAIL: build hash mismatch"; exit 1; }; \
 	 echo "PASS"
+	# a smoke boot resets for no reason at all
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # --- Forced mtime carry -------------------------------------------------------
 #
@@ -317,6 +384,8 @@ define run_carry
 	        cat $(BUILD)/carry.log; exit 1; }; \
 	 grep -qF "$(1)" $(BUILD)/serial.log \
 	   || { echo "FAIL: $(3)"; cat $(BUILD)/carry.log; exit 1; }
+	# a forced carry must not cost a boot
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 endef
 
 # High words to cross from. Not 0..9: a run of consecutive values would never
@@ -408,6 +477,8 @@ define dump_trace
 	 grep -qF 'DUMP-COMPLETE' $(1) \
 	   || { echo "FAIL: the debugger did not finish reading guest memory"; \
 	        tail -5 $(1); exit 1; }
+	# dumping the trace must not have rebooted the run it describes
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 endef
 
 test-sched: $(TARGET)
@@ -476,6 +547,12 @@ test-sched-repro: $(TARGET)
 # the budget check, which runs inside the very executive a hung executive takes
 # with it — so hanging a task proves the watchdog works in the cases where
 # everything else already does.
+# **Waits for the line it is about to read, not for the banner above it.**
+# Waiting on the second banner and then killing QEMU is a race: the boot counter
+# is printed several lines later, and about one run in eight was killed in
+# between. The test then reported "a hardware reset was not counted as a short
+# boot" — a red naming the mechanism under test, caused by the harness. A false
+# red is the expensive kind: it teaches people not to believe failures.
 test-wdt: $(TARGET)
 	@echo "wdt: a hung executive is reset by the hardware backstop"
 	@rm -f $(BUILD)/serial.log $(BUILD)/hang.log && touch $(BUILD)/serial.log
@@ -485,7 +562,7 @@ test-wdt: $(TARGET)
 	 timeout 60 $(GDB) $(TARGET) -batch -x harness/faults/hang.gdb \
 	   > $(BUILD)/hang.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
-	   [ "$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] \
+	   [ "$$(grep -c 'boots  :' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] \
 	     && break; \
 	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
 	 done; \
@@ -499,6 +576,8 @@ test-wdt: $(TARGET)
 	 grep -qF 'boots  : 1 consecutive short' $(BUILD)/serial.log \
 	   || { echo "FAIL: a hardware reset was not counted as a short boot"; \
 	        grep boots $(BUILD)/serial.log; exit 1; }
+	# the hardware backstop resets a hung executive; not a fixed count, because the reset lands wherever the hang left the frame
+	$(call assert_boots,2,6,$(BUILD)/serial.log)
 	@echo "PASS (reset, and the hardware reset was counted)"
 
 # A fault that recurs every boot must climb to the top rung and stop there.
@@ -527,6 +606,8 @@ test-loop:
 	          | grep -c 'recover: rung 3'); \
 	 test "$$after" -eq 0 \
 	   || { echo "FAIL: it reset $$after more times after reaching safe mode"; exit 1; }
+	# a reset loop, deliberately, until the streak reaches its limit and safe mode stops it
+	$(call assert_boots,2,12,$(BUILD)/serial.log)
 	@echo "PASS (streak reached the limit, degraded, and stopped resetting)"
 	@$(MAKE) --no-print-directory clean >/dev/null
 
@@ -594,6 +675,8 @@ voter-one: $(TARGET)
 	     || { echo "FAIL: an unresolvable vote did not fail safe ($$state)"; exit 1; }; \
 	 fi; \
 	 echo "ok - $$state"
+	# a repaired or an unresolvable vote degrades; neither resets
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # Randomised corruption campaign. Deterministic given CAMPAIGN_SEED, which is
 # printed on every run and recorded in the report: a campaign whose seed is not
@@ -631,12 +714,20 @@ test-voter-campaign: $(TARGET)
 # because no debugger write can make mtime disagree with itself.
 test-safe: $(TARGET)
 	@echo "safe: reachable from three subsystems, observable from outside"
-	@$(MAKE) --no-print-directory safe-one WHICH=trap
-	@$(MAKE) --no-print-directory safe-one WHICH=overrun
+	@$(MAKE) --no-print-directory safe-one WHICH=trap SAFE_BOOTS=2
+	@$(MAKE) --no-print-directory safe-one WHICH=overrun SAFE_BOOTS=1
 	@$(MAKE) --no-print-directory safe-clock
 	@echo "PASS (three entry points, three distinct reasons)"
 
-# $(WHICH) = trap | overrun
+# $(WHICH) = trap | overrun, $(SAFE_BOOTS) = how many boots that entry costs
+#
+# The two entries do not cost the same and the declaration says so. A trap resets
+# and comes up degraded on the *next* boot, because the handler resets rather than
+# running policy; an overrun degrades in place. A single number covering both
+# would be a range wide enough to hide the difference, and the difference is the
+# thing ADR 0005 is about.
+SAFE_BOOTS ?= 1
+
 safe-one: $(TARGET)
 	@printf "  %-9s " "$(WHICH)"
 	@rm -f $(BUILD)/serial.log $(BUILD)/safe.log && touch $(BUILD)/serial.log
@@ -664,6 +755,8 @@ safe-one: $(TARGET)
 	   || { echo "FAIL: safe mode was not entered, or not for the right reason"; \
 	        grep -E 'mode|sched|boot' $(BUILD)/serial.log; exit 1; }; \
 	 echo "ok - $$(grep -F 'mode   : SAFE' $(BUILD)/serial.log | head -1 | sed 's/mode   : //')"
+	# trap resets and degrades on the next boot; overrun degrades in place
+	$(call assert_boots,$(SAFE_BOOTS),$(SAFE_BOOTS),$(BUILD)/serial.log)
 
 # The clock entry needs a broken timer: no debugger write can make mtime
 # disagree with itself across the three reads inside obc_mtime_read.
@@ -685,6 +778,8 @@ safe-clock:
 	   || { echo "FAIL: an unsettled clock did not degrade the system"; \
 	        grep -E 'mode|sched|boot' $(BUILD)/serial.log; exit 1; }; \
 	 echo "ok - SAFE, clock would not settle"
+	# a clock that will not settle degrades in place
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 	@$(MAKE) --no-print-directory clean >/dev/null
 
 # --- Host code lint -----------------------------------------------------------
@@ -782,7 +877,7 @@ trap-one: $(TARGET)
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$fault_mode = $(FAULT_MODE)' \
 	   -x harness/faults/fault.gdb > $(BUILD)/fault.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
-	   [ "$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] && break; \
+	   [ "$$(grep -c 'reset  :' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] && break; \
 	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
 	 done; \
 	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
@@ -805,6 +900,8 @@ trap-one: $(TARGET)
 	        true;; \
 	 esac; \
 	 echo "ok -$${line#*reset  :}"
+	# the trap resets exactly once, and the second boot is the one that reports it
+	$(call assert_boots,2,2,$(BUILD)/serial.log)
 
 # The validator must reject on either field alone. One test does not cover the
 # other: checking only the magic passes the wrong-checksum case, and vice versa.
@@ -843,6 +940,8 @@ record-one: $(TARGET)
 	        || { echo "FAIL: the interrupt bit was lost:$$line"; exit 1; };; \
 	 esac; \
 	 echo "ok -$${line#*reset  :}"
+	# a rejected record is read on the boot after the one that wrote it
+	$(call assert_boots,1,2,$(BUILD)/serial.log)
 
 # --- Poisoned-RAM boot --------------------------------------------------------
 #
@@ -879,6 +978,8 @@ test-poisoned: $(TARGET) $(BUILD)/poison.bin
 	 test $$found -eq 1 || { echo "FAIL: sentinel not seen, seed=$(POISON_SEED)"; \
 	                         cat $(BUILD)/poison.log; exit 1; }; \
 	 echo "PASS (seed=$(POISON_SEED))"
+	# poisoned RAM must be survived, not rebooted through
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # Reference measurement. Refuses to run on a dirty tree: a -dirty hash is not
 # reproducible by anyone, and reproducibility is the whole claim of this
@@ -894,12 +995,15 @@ measure:
 	@echo "commit : $$(git rev-parse HEAD)"
 	@echo "describe: $$(git describe --always --dirty)"
 	@echo "toolchain: $$($(CC) -dumpversion), $$($(QEMU) --version | head -1)"
+	@echo "basis   : emulated (icount shift=6) - instruction and timing figures"
+	@echo "          below do not transfer to hardware, see docs/EMULATION-GAP.md"
 	@echo
 	@$(SIZE) $(TARGET)
 	@echo
 	@$(MAKE) --no-print-directory size-check
 	@$(MAKE) --no-print-directory deps-check
 	@$(MAKE) --no-print-directory lint
+	@$(MAKE) --no-print-directory guard-check
 	@echo
 	@$(MAKE) --no-print-directory test
 
@@ -933,6 +1037,8 @@ test-tlm: $(TARGET)
 	@rm -f $(CONSOLE_LOG) $(DOWNLINK_BIN)
 	@timeout $(RUN_TIMEOUT_S) $(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
 	    $(PORTS) -kernel $(TARGET) >/dev/null 2>&1 || true
+	# nominal telemetry costs no boot
+	$(call assert_boots,1,1,$(CONSOLE_LOG))
 	@grep -qF 'tlm    : layout ok' $(CONSOLE_LOG) \
 	  || { echo "FAIL: the descriptor audit did not pass, so no frame is trustworthy"; \
 	       exit 1; }
@@ -961,6 +1067,8 @@ tlm-one: $(TARGET)
 	        tail -5 $(BUILD)/tlm-inject.log; exit 1; }; \
 	 python3 harness/runner/tlm_check.py --elf $(TARGET) --capture $(DOWNLINK_BIN) \
 	   --expect $(SENSOR_EXPECT) --sensor $(SENSOR_IDX)
+	# a lying sensor is flagged, never escalated to a reset
+	$(call assert_boots,1,1,$(CONSOLE_LOG))
 
 # Every detectable failure, on every sensor.
 #
@@ -1036,6 +1144,8 @@ test-tlm-layout-broken:
 	@rm -f $(BUILD)/tlm-broken.bin
 	@timeout $(RUN_TIMEOUT_S) $(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
 	    -serial file:$(BUILD)/console-broken.log -serial file:$(BUILD)/tlm-broken.bin -kernel $(TARGET) >/dev/null 2>&1 || true
+	# a failed layout audit degrades and keeps running
+	$(call assert_boots,1,1,$(BUILD)/console-broken.log)
 	@grep -qF 'LAYOUT AUDIT FAILED' $(BUILD)/console-broken.log \
 	  || { echo "FAIL: a table with a wrong offset passed its own audit"; \
 	       $(MAKE) --no-print-directory clean >/dev/null; exit 1; }
@@ -1127,6 +1237,8 @@ uart-stall-one:
 	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
 	 done; \
 	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null
+	# the whole point: a refused downlink must not cost the machine
+	$(call assert_boots,1,1,$(CONSOLE_LOG))
 	@grep -qF 'UART-STALL-SET' $(BUILD)/stall.log \
 	  || { echo "FAIL: the injector never ran, so this proved nothing"; \
 	       tail -5 $(BUILD)/stall.log; exit 1; }
