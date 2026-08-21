@@ -9,12 +9,40 @@
 
 #include <stdint.h>
 
+#include "core/critical.h"
 #include "core/fault.h"
 #include "core/status.h"
 #include "hal/uart.h"
 
 volatile uint32_t obc_mode;
 volatile uint32_t obc_safe_reason;
+
+/*
+ * Guards the announcement, not the mode.
+ *
+ * obc_mode_enter_safe cannot ask obc_mode_is_safe whether it has already run:
+ * a broken vote makes that function answer "safe" by design, which would
+ * suppress the very announcement that says the vote broke. A plain latch is the
+ * right tool — it is not critical state, it decides nothing about behaviour,
+ * and it only stops the same line being printed twice.
+ */
+static volatile uint32_t s_announced;
+
+int obc_mode_is_safe(void)
+{
+    uint32_t value = OBC_MODE_SAFE;
+    obc_status_t st = obc_critical_get(&value);
+
+    if (st != OBC_OK) {
+        /* No majority. Fail safe: see the header for why the two guesses are
+         * not symmetric. */
+        obc_mode = OBC_MODE_SAFE;
+        return 1;
+    }
+
+    obc_mode = value; /* refresh the mirror the host reads */
+    return value == OBC_MODE_SAFE;
+}
 
 obc_mode_record_t obc_mode_record __attribute__((section(".noinit"), used));
 
@@ -44,10 +72,12 @@ void obc_mode_enter_safe(uint32_t reason)
      * otherwise overwrite the clock as the explanation, leaving the symptom
      * recorded and the cause lost.
      */
-    if (obc_mode == OBC_MODE_SAFE) {
+    if (s_announced != 0u) {
         return;
     }
+    s_announced = 1u;
 
+    obc_critical_set(OBC_MODE_SAFE);
     obc_mode = OBC_MODE_SAFE;
     obc_safe_reason = reason;
 
@@ -71,8 +101,10 @@ void obc_mode_enter_safe(uint32_t reason)
 
 void obc_mode_restore(uint32_t previous_reset_cause)
 {
+    obc_critical_set(OBC_MODE_NOMINAL);
     obc_mode = OBC_MODE_NOMINAL;
     obc_safe_reason = OBC_SAFE_NONE;
+    s_announced = 0u;
 
     /*
      * A trap on the previous boot means this one comes up degraded. The M1

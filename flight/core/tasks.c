@@ -17,7 +17,9 @@
 
 #include <stdint.h>
 
+#include "core/critical.h"
 #include "core/sched.h"
+#include "core/status.h"
 
 /*
  * Periods in frames, and budgets in retired instructions. Named so the static
@@ -73,9 +75,20 @@ static void task_telemetry(void)
     work(100u);
 }
 
+/*
+ * The scrubber. Real work rather than a stub from here on: it walks the
+ * critical copies and repairs a dissenter without anyone needing to read the
+ * value. State written once and read rarely would otherwise accumulate
+ * corruptions until a second one made the first unrecoverable.
+ *
+ * The status is discarded deliberately. An unresolved vote is already counted
+ * in obc_critical_unresolved and has already driven the system degraded through
+ * obc_mode_is_safe; there is nothing this task can add by returning it, and it
+ * has no caller to return it to.
+ */
 static void task_scrub(void)
 {
-    work(200u);
+    OBC_IGNORE(obc_critical_scrub());
 }
 
 static void task_audit(void)

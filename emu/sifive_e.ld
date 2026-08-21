@@ -91,6 +91,22 @@ SECTIONS
     /* gp-relative addressing window, centred on the small-data area. */
     PROVIDE(__global_pointer$ = __data_start + 0x800);
 
+    /*
+     * The three copies of critical state, deliberately not adjacent.
+     *
+     * Interleaved with .bss and .noinit rather than padded apart: the
+     * separation is what matters, and buying it with padding would spend RAM on
+     * a gap. A corruption walking forward from one copy meets several hundred
+     * bytes of unrelated data before reaching the next, and a burst wide enough
+     * to span two would have to cross .bss to do it.
+     *
+     * See flight/core/critical.c and docs/adr/0006-what-is-critical.md.
+     */
+    .critical0 (NOLOAD) : ALIGN(4)
+    {
+        KEEP(*(.critical0))
+    } > RAM
+
     .bss (NOLOAD) : ALIGN(4)
     {
         __bss_start = .;
@@ -111,6 +127,11 @@ SECTIONS
      * the fault record, so the record survives the very failure it exists to
      * report.
      */
+    .critical1 (NOLOAD) : ALIGN(4)
+    {
+        KEEP(*(.critical1))
+    } > RAM
+
     .noinit (NOLOAD) : ALIGN(4)
     {
         __noinit_start = .;
@@ -118,6 +139,29 @@ SECTIONS
         KEEP(*(.noinit.*))
         . = ALIGN(4);
         __noinit_end = .;
+    } > RAM
+
+    /*
+     * Guard. Interleaving with .bss and .noinit gives 404 bytes between the
+     * first two copies and only 56 between the last two, because .noinit is
+     * small — and 56 bytes is fourteen words, which a wild pointer crosses
+     * without noticing.
+     *
+     * This buys the missing separation explicitly. It is the one place in the
+     * system where RAM holding nothing is doing something: the distance is the
+     * mechanism. Charged to M4's line in docs/BUDGET.md, which was allocated
+     * for exactly this and is otherwise barely touched.
+     */
+    .critical_guard (NOLOAD) : ALIGN(4)
+    {
+        __critical_guard_start = .;
+        . += 320;
+        __critical_guard_end = .;
+    } > RAM
+
+    .critical2 (NOLOAD) : ALIGN(4)
+    {
+        KEEP(*(.critical2))
     } > RAM
 
     .stack (NOLOAD) : ALIGN(16)

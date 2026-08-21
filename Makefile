@@ -79,6 +79,7 @@ SCHED_SRC ?= flight/core/sched.c
 TASKS_SRC ?= flight/core/tasks.c
 
 SRC_C := flight/core/main.c \
+         flight/core/critical.c \
          flight/core/mode.c \
          $(SCHED_SRC) \
          $(TASKS_SRC) \
@@ -120,7 +121,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check lint test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -167,7 +168,7 @@ size: $(TARGET)
 # Debug sections are excluded on purpose. They are not loaded, they do not
 # consume flash or RAM, and they move with compiler flags that have nothing to
 # do with the budget.
-SIZE_SECTIONS := \.init|\.text|\.rodata|\.data|\.bss|\.stack
+SIZE_SECTIONS := \.init|\.text|\.rodata|\.data|\.bss|\.stack|\.critical[0-2]
 SIZE_REF      := docs/size-reference.txt
 SIZE_ACTUAL   := $(BUILD)/size-actual.txt
 
@@ -422,6 +423,104 @@ test-sched-repro: $(TARGET)
 	$(call dump_trace,$(BUILD)/trace-a.txt)
 	$(call dump_trace,$(BUILD)/trace-b.txt)
 	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-a.txt $(BUILD)/trace-b.txt
+
+# --- Voter --------------------------------------------------------------------
+#
+# Once per copy, never once on whichever copy is convenient. The three are not
+# symmetric in the code — one is read first, one is compared against, one
+# settles the vote — and a recovery path tested by a single injection proves
+# that injection site rather than the path. M3 produced exactly that failure
+# with safe mode's clock entry, which was wired to one of three call sites.
+CRIT_COPIES := 0 1 2
+
+test-voter: $(TARGET)
+	@echo "voter: single-copy corruption, once per copy"
+	@for c in $(CRIT_COPIES); do \
+	   printf "  copy %s " $$c; \
+	   $(MAKE) --no-print-directory CRIT_N=1 CRIT_FIRST=$$c CRIT_BIT=$$c voter-one \
+	     || exit 1; \
+	 done
+	@echo "  double-copy corruption, once per pair"
+	@for c in $(CRIT_COPIES); do \
+	   printf "  pair %s " $$c; \
+	   $(MAKE) --no-print-directory CRIT_N=2 CRIT_FIRST=$$c CRIT_BIT=5 voter-one \
+	     || exit 1; \
+	 done
+	@echo "PASS"
+
+# $(CRIT_N) copies corrupted starting at $(CRIT_FIRST), flipping bit $(CRIT_BIT).
+voter-one: $(TARGET)
+	@rm -f $(BUILD)/serial.log $(BUILD)/crit.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 timeout 40 $(GDB) $(TARGET) -batch \
+	   -ex 'set $$critical_copies = $(CRIT_N)' \
+	   -ex 'set $$critical_first = $(CRIT_FIRST)' \
+	   -ex 'set $$critical_bit = $(CRIT_BIT)' \
+	   -x harness/faults/critical.gdb > $(BUILD)/crit.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 timeout 20 $(GDB) $(TARGET) -batch -ex 'set confirm off' \
+	   -ex 'set architecture riscv:rv32' -ex 'target remote localhost:1234' \
+	   -ex 'printf "repairs=%u unresolved=%u mode=%u\n", obc_critical_repairs, obc_critical_unresolved, obc_mode' \
+	   > $(BUILD)/crit-state.txt 2>&1; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'CRITICAL-INJECTED' $(BUILD)/crit.log \
+	   || { echo "FAIL: nothing was corrupted, so this proved nothing"; \
+	        tail -5 $(BUILD)/crit.log; exit 1; }; \
+	 state=$$(grep -o 'repairs=[0-9]* unresolved=[0-9]* mode=[0-9]*' $(BUILD)/crit-state.txt); \
+	 if [ "$(CRIT_N)" = 1 ]; then \
+	   echo "$$state" | grep -qE 'repairs=[1-9]' \
+	     || { echo "FAIL: a single corrupted copy was not repaired ($$state)"; exit 1; }; \
+	   echo "$$state" | grep -qF 'unresolved=0' \
+	     || { echo "FAIL: a single corruption should still leave a majority ($$state)"; exit 1; }; \
+	   echo "$$state" | grep -qF 'mode=0' \
+	     || { echo "FAIL: a repaired corruption changed behaviour ($$state)"; exit 1; }; \
+	   grep -qF '30 dispatches' $(BUILD)/serial.log \
+	     || { echo "FAIL: a repaired corruption changed the dispatch count"; exit 1; }; \
+	 else \
+	   echo "$$state" | grep -qE 'unresolved=[1-9]' \
+	     || { echo "FAIL: two corrupted copies still produced a verdict ($$state)"; exit 1; }; \
+	   echo "$$state" | grep -qF 'mode=1' \
+	     || { echo "FAIL: an unresolvable vote did not fail safe ($$state)"; exit 1; }; \
+	 fi; \
+	 echo "ok - $$state"
+
+# Randomised corruption campaign. Deterministic given CAMPAIGN_SEED, which is
+# printed on every run and recorded in the report: a campaign whose seed is not
+# written down cannot be re-run, and a result that cannot be re-run is an
+# anecdote.
+#
+# The full acceptance criterion is 1000 runs. Each takes about two seconds of
+# host time, so 1000 is roughly half an hour and is run deliberately rather than
+# as part of the ordinary suite. CAMPAIGN_RUNS defaults to a sample that proves
+# the machinery.
+CAMPAIGN_SEED ?= 1
+CAMPAIGN_RUNS ?= 20
+
+test-voter-campaign: $(TARGET)
+	@echo "voter: $(CAMPAIGN_RUNS) randomised corruptions, seed=$(CAMPAIGN_SEED)"
+	@$(PY) -c "import random; r=random.Random($(CAMPAIGN_SEED)); \
+	  print('\n'.join(f'{r.randint(1,2)} {r.randint(0,2)} {r.randint(0,31)}' \
+	  for _ in range($(CAMPAIGN_RUNS))))" > $(BUILD)/campaign.txt
+	@n=0; fail=0; \
+	 while read copies first bit; do \
+	   n=$$(( n + 1 )); \
+	   if $(MAKE) --no-print-directory CRIT_N=$$copies CRIT_FIRST=$$first \
+	        CRIT_BIT=$$bit voter-one > $(BUILD)/campaign-run.txt 2>&1; then \
+	     printf "."; \
+	   else \
+	     fail=$$(( fail + 1 )); \
+	     printf "\n  FAIL run %s: copies=%s first=%s bit=%s\n" "$$n" "$$copies" "$$first" "$$bit"; \
+	     tail -3 $(BUILD)/campaign-run.txt; \
+	   fi; \
+	 done < $(BUILD)/campaign.txt; \
+	 echo; \
+	 echo "  $$n runs, $$fail failures, seed=$(CAMPAIGN_SEED)"; \
+	 test $$fail -eq 0
 
 # --- Safe mode ----------------------------------------------------------------
 #

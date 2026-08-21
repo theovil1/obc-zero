@@ -1,9 +1,12 @@
 # gcc      14.2.0
 # binutils 2.45.50.20251209
-# ignores  13
-.bss          396
+# ignores  14
+.bss          408
+.critical0      8
+.critical1      8
+.critical2      8
 .data           4
 .init         158
 .rodata      1332
 .stack       1024
-.text        3152
+.text        3616

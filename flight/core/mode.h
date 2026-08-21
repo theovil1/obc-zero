@@ -35,6 +35,15 @@
  * Observable 1 of 3: a word in RAM. Answers "what is the system doing now"
  * without perturbing it, because the debugger reads it without stopping
  * anything that matters.
+ *
+ * **A mirror, not the storage.** The mode itself lives in three separately
+ * placed copies and is only ever reached through the voter — ADR 0006 admits it
+ * as the one live variable that qualifies as critical, because a corrupted mode
+ * silently returns a degraded system to nominal and nothing re-derives it to
+ * notice. This word is refreshed by each vote so that a host reading memory
+ * sees the current answer without having to call a function.
+ *
+ * Flight code never reads it. Use obc_mode_is_safe().
  */
 extern volatile uint32_t obc_mode;
 extern volatile uint32_t obc_safe_reason;
@@ -79,10 +88,18 @@ void obc_mode_enter_safe(uint32_t reason);
  */
 void obc_mode_restore(uint32_t previous_reset_cause);
 
-/* True if the system is degraded. Cheap enough for the dispatch loop. */
-static inline int obc_mode_is_safe(void)
-{
-    return obc_mode == OBC_MODE_SAFE;
-}
+/*
+ * True if the system is degraded, decided by a vote over the three copies.
+ *
+ * Not inline and not a plain read: critical state is never read directly, and
+ * the whole value of three copies is that their disagreement is the signal.
+ *
+ * **Fails safe.** When no majority survives — two corrupted copies — there is no
+ * trustworthy answer, and the two available guesses are not symmetric. Guessing
+ * nominal resumes tasks that were suspended because something was wrong.
+ * Guessing degraded suspends work that may have been fine. The second is
+ * recoverable by a human; the first is not necessarily recoverable at all.
+ */
+int obc_mode_is_safe(void);
 
 #endif /* OBC_MODE_H */

@@ -20,7 +20,7 @@ to the reserve, but exceeding a line requires changing this file and saying why.
 | `.data` + `.bss`, core | M0–M3 | 0 | 0.0 % | **In use**, currently empty |
 | Scheduler state and task table | M2 | 512 | 3.1 % | **In use**, 384 B measured |
 | Panic context and safe-mode state | M3 | 256 | 1.6 % | Planned |
-| Triple-redundant critical state | M4 | 3072 | 18.8 % | Planned |
+| Triple-redundant critical state | M4 | 3072 | 18.8 % | **In use**, 344 B measured |
 | Telemetry frames and sensor mocks | M6 | 2048 | 12.5 % | Planned |
 | Command queue | M7 | 2048 | 12.5 % | Planned |
 | Event log buffer | M8 | 4096 | 25.0 % | Planned |
@@ -59,10 +59,20 @@ copies: two copies detect corruption but cannot vote on it.
 What counts as critical is decided by the criterion in ADR 0006, written before
 M4 rather than while the budget was refusing — otherwise "critical" comes to
 mean "whatever fit". Applied to the state that exists, it admits **one live
-variable, `obc_mode`, four bytes**. The rest of this line stays unspent and
-returns to the reserve. The list is expected to grow as M5, M7 and M8 arrive
-with state that must be argued against the criterion rather than assumed into
-it.
+variable, `obc_mode`, four bytes**. The list is expected to grow as M5, M7 and
+M8 arrive with state that must be argued against the criterion rather than
+assumed into it.
+
+**Measured: 344 B of the 3072.** Three copies of 8 bytes is 24; the other 320 is
+a guard region that exists to hold the copies apart. Interleaving them with
+`.bss` and `.noinit` gave 404 bytes of separation between the first two and only
+56 between the last two, because `.noinit` is small — and 56 bytes is fourteen
+words, which a wild pointer crosses without noticing. The guard brings both gaps
+to roughly 400.
+
+That is the one place in this system where RAM holding nothing is doing
+something: the distance is the mechanism, not padding. The remaining 2728 B of
+the line returns to the reserve.
 
 **Event log, 4096 B.** The largest line overall. An event log that wraps too
 quickly cannot explain an anomaly after the fact, which defeats its purpose. If
