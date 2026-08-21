@@ -363,6 +363,21 @@ def main(argv: list[str]) -> int:
         check=False,
     ).stdout.strip()
 
+    # Resolved and checked before a single run, not after fourteen minutes of
+    # them. A refusal that arrives at the end has already wasted the campaign it
+    # refused to record.
+    report = args.report or Path(
+        f"docs/reports/{time.strftime('%Y-%m-%d')}-voter-campaign-{commit}.md"
+    )
+    if report.exists():
+        print(
+            f"  REFUSED: {report} already exists.\n"
+            "  Reports are append-only history. Pass --report to write "
+            "elsewhere, or\n  re-run against a different commit.",
+            file=sys.stderr,
+        )
+        return 2
+
     injections = plan(args.runs, args.seed)
     tally = Tally()
     started = time.monotonic()
@@ -407,9 +422,6 @@ def main(argv: list[str]) -> int:
             print(frame, flush=True)
 
     elapsed = time.monotonic() - started
-    report = args.report or Path(
-        f"docs/reports/{time.strftime('%Y-%m-%d')}-m4-voter-campaign.md"
-    )
     report.parent.mkdir(parents=True, exist_ok=True)
     write_report(report, tally, args.runs, args.seed, elapsed, commit)
 

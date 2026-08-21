@@ -5,6 +5,77 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — The harness deleted evidence, and the false red is the worse lie
+
+**Campaign commit:** `775b3d7` — 1000 runs, seed 1, zero failures, 14m46s
+**Report:** `docs/reports/2026-08-21-voter-campaign-775b3d7.md`
+
+### The refactor changed nothing, and the campaign proves it
+
+Restructuring the copies from "one variable in three places" into "three
+regions holding items" produced **byte-identical counters**: 481 repairs, 34254
+unresolved, coverage 320 / 324 / 356, across a thousand seeded runs.
+
+That identity is the useful result. A refactor justified by what it will cost at
+M8 is exactly the kind that quietly changes behaviour, and the campaign says it
+did not.
+
+### My own tool broke the append-only rule, silently
+
+The runner names its report by date. Re-running on the same day **overwrote the
+previous report**, and the only reason the earlier one survives is that it had
+been committed.
+
+`CLAUDE.md` has said since M0 that reports are append-only history, superseded by
+newer ones and never edited. The rule was written for a human editing a file,
+and the thing that broke it was a program doing what it was told.
+
+Two fixes, and the second matters more than the first:
+
+- the filename carries the commit, so two campaigns on the same day cannot
+  collide;
+- **the runner refuses rather than overwrites**, and refuses *before* running
+  anything. The first version of that check sat at the end, which would have
+  spent fourteen minutes on a campaign before declining to record it. Now it
+  declines in 0.04 seconds.
+
+This is the third instance of one pattern in this project: a mechanism that
+works, with no guard against it doing the opposite of what was intended. First
+`size-accept`, which asked for a justification and accepted none. Then the
+gdbstub port, which assumed exclusivity and got it wrong. Now a report writer
+that destroys reports. The mechanism is never the problem; the missing refusal
+is.
+
+### The false red is more corrosive than the false greens
+
+Worth separating from the port-collision entry that produced it, because it is a
+different observation.
+
+This project has now produced **three false greens** — a debugger script that
+errored while the run passed, an injection aimed at the wrong read, a threshold
+beyond the reach of the whole run — and **one false red**: six confident,
+specific failure reports naming subsystems that were working perfectly.
+
+The false green costs a missed defect, once. The false red costs something that
+does not repair: it teaches you not to believe failures. Once the habit forms of
+re-running a red test because *it is probably the environment*, the harness has
+stopped being evidence and become a suggestion. There is no fix for that in the
+harness, because the damage is to the person reading it.
+
+Which is why the port collision was worth fixing at M4 rather than at M9, and
+why the campaign runner refuses instead of warning. **A harness may fail. It may
+not be confidently wrong.**
+
+### Also
+
+`size-accept` now refuses without `REASON=` and writes the reason, dated, into
+the reference. The count that drifted from 13 to 14 unremarked could not do so
+again. The scrubber criterion is unticked and the reason recorded: its cost is
+measured, it has never repaired anything, and it cannot until M8 registers state
+that is read rarely enough for a periodic sweep to beat a read.
+
+---
+
 ## 2026-08-21 — The discard count was raised silently, one milestone after the rule
 
 No measurement. A correction, recorded because the alternative is a rule that
