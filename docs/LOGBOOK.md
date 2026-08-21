@@ -5,6 +5,62 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — La survie devient une déclaration, et un faux rouge mesuré à 1 sur 8
+
+Pas une mesure du binaire : aucun code de vol n'a changé. Deux mesures du
+harnais.
+
+### Le garde de survie
+
+Un test annonçait PASS en traversant deux réinitialisations machine. Il exerçait
+un chemin de dégradation et assertait tout du chemin — trame larguée, abandon
+compté, annonce émise — et jamais que le véhicule était encore là. Deux bandeaux
+de boot dormaient dans le journal.
+
+Chaque assertion prise séparément était correcte. C'est pour ça que rien ne
+l'aurait attrapé autrement que par accident.
+
+Désormais chaque run automatisé déclare combien de boots il s'attend à survivre,
+et `guard-check` compte les lancements QEMU contre les déclarations. Quinze runs,
+quinze déclarations. Un défaut par défaut qu'on peut oublier n'est pas un défaut
+par défaut.
+
+**Le garde a trouvé deux choses dans l'heure.** `safe-one` déclarait un boot pour
+ses deux points d'entrée, or l'entrée par trap en coûte deux — le gestionnaire
+réinitialise et le boot suivant remonte dégradé. C'est exactement la différence
+dont parle l'ADR 0005, et un nombre unique l'aurait masquée.
+
+### Un faux rouge mesuré
+
+`test-wdt` échouait environ **1 fois sur 8**, avec « a hardware reset was not
+counted as a short boot » — un rouge qui nommait le mécanisme sous test, causé
+par le harnais.
+
+La boucle d'attente s'arrêtait au deuxième bandeau puis tuait QEMU. Le compteur
+de boots est imprimé trois lignes plus bas. Une course.
+
+| | Verts | Rouges |
+|---|---:|---:|
+| Avant | 7 | 1 |
+| Après | 10 | 0 |
+
+La règle qui en sort : **attendre la ligne qu'on va lire, pas un indice qui la
+précède d'habitude.** Le faux rouge est le coûteux — il apprend à ne pas croire
+les échecs.
+
+### La catégorie « l'émulateur est plus clément »
+
+Deux entrées, et ça fait une catégorie : la RAM qui démarre à zéro, l'UART qui
+n'oppose jamais de refus. Rassemblées dans `docs/EMULATION-GAP.md` plutôt que
+dispersées dans les ADR qui les ont trouvées, parce que la valeur est dans
+l'ensemble. Quand la carte arrivera, c'est la liste de ce qui casse.
+
+Une entrée close y reste : le zéro à froid est couvert par `test-poisoned`, et
+retirer l'entrée perdrait la raison d'être de ce test — c'est comme ça qu'un test
+qui a l'air cher se fait supprimer.
+
+---
+
 ## 2026-08-21 — L'UART mesuré sur `8f67feb`, et deux défauts dans l'instrument
 
 Mesure sur l'arbre propre de `8f67feb`. La ligne M6 passe de 104 à 112 octets
