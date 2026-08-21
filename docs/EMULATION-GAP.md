@@ -120,6 +120,27 @@ Three states and no others:
 
 ---
 
+---
+
+## Not a gap: the uplink's ingest rate
+
+Recorded here to be **ruled out**, because it looks like one and is not.
+
+The vehicle ingests about 8 bytes per 31.25 ms frame — 256 B/s, roughly twelve
+commands per second — and a first reading of that blames QEMU, which refills the
+receive FIFO only when its main loop runs.
+
+It is not the emulator. The bound is the FIFO depth times the poll rate, and both
+are properties of the design: an FE310's receive FIFO is eight entries, and this
+executive polls once per frame. On silicon the wire delivers 11 520 B/s at 115200
+baud, forty-five times faster than the vehicle drains it, and **there is no flow
+control** — so a fast ground station loses bytes on hardware exactly as it does
+here, and rather more of them.
+
+It is in the README under the limits an operator would need to know, which is
+where a design constraint belongs. The reason it is also here is that the next
+person to measure it will reach for this file first.
+
 ## Rules for this file
 
 1. **An entry is added by the milestone that discovers the gap, not later.** The

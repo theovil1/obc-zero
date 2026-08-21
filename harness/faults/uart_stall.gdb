@@ -41,6 +41,12 @@ eval "target remote localhost:%d", $campaign_port
 if $_isvoid($stall_on)
   set $stall_on = 1
 end
+# 0 means "use the flight constant". A non-zero value is only honoured by the
+# substitute, and it is what makes the per-poll cost exactly measurable: two runs
+# whose allowances differ by A differ by A polls and by nothing else.
+if $_isvoid($stall_allowance)
+  set $stall_allowance = 0
+end
 if $_isvoid($stall_emits)
   set $stall_emits = 3
 end
@@ -52,6 +58,7 @@ break obc_sched_run
 continue
 delete
 
+set obc_uart_stall_allowance = $stall_allowance
 set obc_uart_stall_active = $stall_on
 if $stall_on
   set obc_uart_stall_status = 0x80000000
@@ -59,9 +66,10 @@ else
   set obc_uart_stall_status = 0
 end
 
-printf "UART-STALL-SET on=%d status=0x%08x allowance=%u poll=%u\n", \
+printf "UART-STALL-SET on=%d status=0x%08x allowance=%u override=%u poll=%u\n", \
   obc_uart_stall_active, obc_uart_stall_status, \
-  (unsigned int)obc_uart_tx_retry_total, (unsigned int)obc_uart_tx_poll_instr
+  (unsigned int)obc_uart_tx_retry_total, obc_uart_stall_allowance, \
+  (unsigned int)obc_uart_tx_poll_instr
 
 # Let the refusal last a set number of emissions, then mend the link so the
 # frames that follow can carry the count out.

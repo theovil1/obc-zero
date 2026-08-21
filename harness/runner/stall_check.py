@@ -150,6 +150,16 @@ def main(argv: list[str] | None = None) -> int:
         help="require the run to have booted exactly once",
     )
     parser.add_argument(
+        "--poll-cost-from",
+        type=Path,
+        help="a cost recorded by the same image with a smaller allowance",
+    )
+    parser.add_argument(
+        "--extra-polls",
+        type=int,
+        help="how many more polls this run's allowance permits",
+    )
+    parser.add_argument(
         "--no-overrun",
         action="store_true",
         help="require the executive to have judged no dispatch over budget",
@@ -215,6 +225,32 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(
                 f", {observed} instructions spent waiting, at least {floor} of them polling"
+            )
+
+        if args.poll_cost_from and args.extra_polls:
+            before = int(args.poll_cost_from.read_text().strip())
+            _allowance, poll, _byte, _len = _flight_figures(args.elf)
+            diff = cost - before
+            # Bracketed rather than divided, and not as a tolerance: the two runs
+            # differ by the polls *and* by a fixed instruction or two of loop
+            # setup, so the difference is `extra x poll` plus a residual smaller
+            # than one poll. Requiring the residual to stay under one poll pins
+            # the per-poll figure to an exact integer — poll-1 and poll+1 both
+            # fail — without inventing a margin.
+            if not (args.extra_polls * poll <= diff < args.extra_polls * (poll + 1)):
+                raise CheckFailed(
+                    f"{args.extra_polls} extra polls cost {diff} instructions, "
+                    f"which does not put one poll at {poll} "
+                    f"(expected {args.extra_polls * poll} to "
+                    f"{args.extra_polls * (poll + 1) - 1}). A measured constant is "
+                    "only a control while something re-measures it — and this one "
+                    "feeds the assertion that keeps a congested downlink from "
+                    "resetting the machine"
+                )
+            residual = diff - args.extra_polls * poll
+            print(
+                f", one poll costs {poll} instructions as the build asserts "
+                f"({diff} for {args.extra_polls}, residual {residual})"
             )
 
         if args.record_cost:

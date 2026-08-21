@@ -144,6 +144,11 @@ static void port_init(uint32_t base)
 volatile uint32_t obc_uart_stall_status __attribute__((section(".noinit")));
 volatile uint32_t obc_uart_stall_active __attribute__((section(".noinit")));
 
+/* Present so the shared injector can set it, and deliberately unused: this
+ * variant never spends an allowance at all, which is the defect it exists to
+ * demonstrate. */
+volatile uint32_t obc_uart_stall_allowance __attribute__((section(".noinit")));
+
 static obc_status_t port_putc(uint32_t base, uint8_t byte, uint32_t *allowance)
 {
     /* STUB: chosen once, outside the loop, so the loop below is instruction for

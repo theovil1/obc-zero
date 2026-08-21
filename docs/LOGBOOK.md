@@ -5,6 +5,70 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — Recensement des constantes mesurées, et une qui l'était dans la mauvaise direction
+
+Pas de mesure du binaire. Un recensement, un contrôle renforcé, et deux
+décisions écrites avant d'agir.
+
+### Le registre
+
+Six constantes du système viennent d'une observation et non d'une dérivation.
+Chacune est, par défaut, dans l'état où `T1_NOMINAL_INSTR` s'est trouvée : un
+contrôle réel, qui passe, dont l'entrée a cessé d'être vraie.
+
+`docs/MEASURED-CONSTANTS.md` les liste avec ce qui les remesure et **dans quelle
+direction ce contrôle échoue**. La colonne de statut est le point : une constante
+surveillée dans un seul sens n'est surveillée qu'à moitié.
+
+### Une surveillance dans le mauvais sens
+
+`OBC_UART_TX_POLL_INSTR` alimentait un plancher. Un plancher n'échoue que si la
+constante est trop *haute* — une valeur trop basse abaisse le plancher et rend le
+test plus facile à passer. C'est le sens dans lequel un chiffre périmé dérive
+quand le code devient moins cher, donc le sens dangereux.
+
+Fermé en rendant l'allocation pilotable **dans le substitut seulement** : deux
+runs de la même image dont les allocations diffèrent d'un nombre connu diffèrent
+de ce nombre de scrutations et de rien d'autre.
+
+Mesuré : 256 scrutations de plus coûtent 1281 instructions. Encadré plutôt que
+divisé — les deux runs diffèrent aussi d'une ou deux instructions fixes de mise
+en place — et exiger que le reste tienne sous une scrutation épingle l'entier
+sans inventer de marge. Vérifié dans les deux sens : 4 et 6 sont refusés, par
+deux contrôles différents.
+
+### La forme de la campagne, décidée avant de la lancer
+
+Dix mille runs courts plutôt que quelques runs longs, et **la raison n'est pas la
+couverture de démarrage**. C'est l'ADR 0012 : allonger la fenêtre change l'image,
+et un résultat de robustesse sur un binaire à fenêtre différente est un résultat
+sur un autre binaire.
+
+Trois choses que cette forme n'exercera pas, écrites pour que le rapport ne
+laisse pas croire le contraire : la saturation des compteurs, qui reste un
+argument et non une mesure ; le rejeu à travers un reset, puisque le compteur de
+liaison montante repart à zéro à chaque boot ; et toute dérive de longue durée,
+qui est la question de M10.
+
+Le rejeu inter-boot part au backlog comme question de conception — le compteur
+doit-il survivre à un reset — et M8 est l'endroit où on peut y répondre.
+
+### Le débit d'ingestion est un chiffre d'exploitation
+
+Huit octets par frame de 31,25 ms : 256 B/s, une douzaine de commandes par
+seconde. À 115200 bauds le fil livre 11 520 B/s, **quarante-cinq fois plus vite
+que le véhicule ne draine**, et il n'y a aucun contrôle de flux.
+
+Ce n'est pas un artefact d'émulation, et je l'ai inscrit dans le README plutôt
+que dans un commentaire de test : une station sol qui émet trop vite perd des
+trames sans en être informée. C'est le genre de chose qu'un opérateur doit lire
+avant, pas découvrir après.
+
+Il figure aussi dans `EMULATION-GAP.md` comme **écart écarté**, parce que la
+prochaine personne à le mesurer ouvrira ce fichier en premier.
+
+---
+
 ## 2026-08-21 — M7 mesuré sur `ad25f9f`, et deux contrôles périmés que la suite a trouvés
 
 | | Valeur |

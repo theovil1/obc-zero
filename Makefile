@@ -1331,6 +1331,8 @@ test-tlm-all: test-tlm test-tlm-sensors test-rung2-reachable test-tlm-blind-brok
 # not check that, and the run it passed had climbed the ladder to rung 3 and reset
 # the machine over a congested downlink — the one outcome ADR 0009 exists to
 # prevent, happening while the test reported PASS.
+STALL_ALLOWANCE ?= 0
+
 uart-stall-build:
 	@$(MAKE) --no-print-directory clean >/dev/null
 	@$(MAKE) --no-print-directory UART_SRC=harness/broken/uart_stalled.c \
@@ -1348,6 +1350,7 @@ uart-stall-one:
 	 qpid=$$!; sleep 1; \
 	 timeout 60 $(GDB) $(TARGET) -batch -nx \
 	   -ex 'set $$stall_on = $(STALL_ON)' \
+	   -ex 'set $$stall_allowance = $(STALL_ALLOWANCE)' \
 	   -x harness/faults/uart_stall.gdb > $(BUILD)/stall.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
 	   grep -qE 'boot   : (ok|FAULT)' $(CONSOLE_LOG) 2>/dev/null && break; \
@@ -1413,7 +1416,20 @@ test-uart-stall:
 	@$(MAKE) --no-print-directory STALL_ON=1 uart-stall-one
 	@$(PY) harness/runner/stall_check.py --elf $(TARGET) \
 	    --capture $(DOWNLINK_BIN) --console $(CONSOLE_LOG) --one-boot \
-	    --no-overrun --expect-drops --nominal-cost $(BUILD)/stall-nominal.txt
+	    --no-overrun --expect-drops --nominal-cost $(BUILD)/stall-nominal.txt \
+	    --record-cost $(BUILD)/stall-a1.txt
+	@# The per-poll cost, exactly rather than as a floor.
+	@#
+	@# Two runs of one image whose allowances differ by a known amount differ by
+	@# that many polls and by nothing else. A floor only fails when the constant
+	@# is too high; a constant that is too *low* lowers the floor and makes the
+	@# test easier, which is the direction a stale figure drifts when code gets
+	@# cheaper. See docs/MEASURED-CONSTANTS.md.
+	@printf "  poll cost       "
+	@$(MAKE) --no-print-directory STALL_ON=1 STALL_ALLOWANCE=512 uart-stall-one
+	@$(PY) harness/runner/stall_check.py --elf $(TARGET) \
+	    --capture $(DOWNLINK_BIN) --console $(CONSOLE_LOG) --one-boot \
+	    --poll-cost-from $(BUILD)/stall-a1.txt --extra-polls 256
 	@$(MAKE) --no-print-directory clean >/dev/null
 	@echo "PASS"
 

@@ -20,25 +20,53 @@ with an auditable record of what was tested and what failed.
 Pre-alpha. Nothing here has flown. Nothing here is qualified.
 Treat every claim in `docs/` as a lab result, not a flight heritage claim.
 
-**Milestone 0 complete.** The image boots on QEMU `sifive_e` and reports its
-build, entry point and memory footprint. Current figures, measured on a clean
+**Milestones 0 to 7 complete**, M7 with two criteria deliberately unticked —
+see `PLAN.md`, which says which and why. Current figures, measured on a clean
 tree and pinned against drift:
 
 | | |
 |---|---|
-| Flash | 874 B of a 4 MiB budget |
-| RAM | 1024 B of **16384 B**, the whole of the board's memory |
-| Stack peak | 64 B, measured from a paint pattern at run time |
-| Boot to banner | under 0.1 s |
+| Flash | 9946 B of a 4 MiB budget |
+| RAM | 2272 B of **16384 B**, the whole of the board's memory |
+| Stack peak | 112 B, measured from a paint pattern at run time |
+| Telemetry frame | 91 bytes, layout read from the binary by the ground |
+| Command frame | 20 bytes, eight rejection reasons in a closed set |
+| Dispatches per window | 46, derived from the task table |
 
 Every address the image relies on was read out of the machine rather than taken
-from documentation, and the reset vector was confirmed independently through the
-debugger. The reasoning is in `docs/adr/`, the measurements in
-`docs/LOGBOOK.md`, and the RAM allocation for later milestones in
-`docs/BUDGET.md`.
+from documentation. The reasoning is in `docs/adr/`, the measurements in
+`docs/LOGBOOK.md`, the RAM allocation in `docs/BUDGET.md`, and the constants that
+came from an observation — with what re-checks each — in
+`docs/MEASURED-CONSTANTS.md`.
 
-Fault injection does not exist yet. Until it does, this repository demonstrates
-nothing about fault tolerance, which is the only thing it is ultimately for.
+## Limits an operator would need to know
+
+Not caveats about the emulator. These are properties of the design, and they
+would be true of a board.
+
+**The uplink ingests at most 8 bytes per 31.25 ms frame — about 256 B/s, or
+twelve commands per second.** The bound is the receive FIFO depth times the poll
+rate, not the line rate: at 115200 baud the wire delivers 11 520 B/s, which is
+forty-five times faster than the vehicle drains it. **There is no flow control.**
+A ground station that transmits faster than this does not get its commands in,
+and will not be told. Pace the uplink or lose frames.
+
+**Telemetry costs 12.5 % of a frame to transmit on real hardware.** A 91-byte
+frame at 115200 baud is 61 035 core instructions, against a declared budget of
+4500 that holds only because the emulated port accepts bytes instantly. The
+design does not fit silicon as it stands and the fix is a non-blocking transmit
+path, not a larger budget. `docs/EMULATION-GAP.md` entry 2.
+
+**Safe mode does not exit on its own.** By decision, recorded in
+`docs/adr/0005-safe-mode.md`. The ground is the only way out, which is why the
+command path is dispatched even when degraded.
+
+**A command frame that validates is well formed, not authorised.** There is no
+authentication and none is implied by a green fuzz campaign. `docs/adr/0011`.
+
+Where the emulator is kinder than silicon — and therefore where a green result
+here is weaker than it looks — is listed in `docs/EMULATION-GAP.md`, with a status
+column saying which gaps are still open.
 
 ## Scope
 

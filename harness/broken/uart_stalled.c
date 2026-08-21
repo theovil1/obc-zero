@@ -131,6 +131,25 @@ static void port_init(uint32_t base)
 volatile uint32_t obc_uart_stall_status __attribute__((section(".noinit")));
 volatile uint32_t obc_uart_stall_active __attribute__((section(".noinit")));
 
+/*
+ * The allowance, as a variable the harness can set.
+ *
+ * This is what makes the per-poll cost measurable *exactly* rather than bounded.
+ * Two runs of this image with allowances A and 2A differ by precisely A polls —
+ * everything else about the dispatch is identical — so the cost of one poll is
+ * the difference divided by A, and it can be held against the constant the
+ * flight build asserts with.
+ *
+ * Without it the poll cost is only checked by a floor, and a floor fails in one
+ * direction: a figure that is too *low* lowers the floor and makes the test
+ * easier to pass. That is the unsafe direction, and it is the direction a stale
+ * constant drifts in when code gets cheaper.
+ *
+ * Only in this substitute. The flight build's allowance stays a compile-time
+ * constant the static assertion can reason about.
+ */
+volatile uint32_t obc_uart_stall_allowance __attribute__((section(".noinit")));
+
 static obc_status_t port_putc(uint32_t base, uint8_t byte, uint32_t *allowance)
 {
     /* STUB: chosen once, outside the loop, so the loop below is instruction for
@@ -243,7 +262,10 @@ obc_status_t obc_uart_downlink_write(const volatile uint8_t *bytes, uint32_t len
      * need different responses.
      */
     {
-        uint32_t allowance = UART_TX_RETRY_TOTAL_CHECKED;
+        uint32_t allowance = (obc_uart_stall_active != 0u
+                              && obc_uart_stall_allowance != 0u)
+                                 ? obc_uart_stall_allowance
+                                 : UART_TX_RETRY_TOTAL_CHECKED;
 
         for (i = 0u; i < len; i++) {
             obc_status_t st = port_putc(UART1_BASE, bytes[i], &allowance);
