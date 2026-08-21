@@ -233,7 +233,7 @@ define run_carry
 	 qpid=$$!; \
 	 sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$carry_line = "$(CARRY_LINE)"' \
-	   -ex 'set $$carry_hi = $(2)' -x emu/carry.gdb > $(BUILD)/carry.log 2>&1; \
+	   -ex 'set $$carry_hi = $(2)' -x harness/faults/carry.gdb > $(BUILD)/carry.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
 	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
 	   kill -0 $$qpid 2>/dev/null || break; \
@@ -282,7 +282,7 @@ test-carry-expect-fault: $(TARGET)
 test-carry-broken:
 	@echo "carry: forced mid-read carry, deliberately naive implementation"
 	@$(MAKE) --no-print-directory clean >/dev/null
-	@$(MAKE) --no-print-directory MTIME_SRC=emu/broken/mtime_naive.c \
+	@$(MAKE) --no-print-directory MTIME_SRC=harness/broken/mtime_naive.c \
 	    test-carry-expect-fault
 	@echo "PASS (the broken build was correctly rejected)"
 	@$(MAKE) --no-print-directory clean >/dev/null
@@ -328,7 +328,7 @@ trap-one: $(TARGET)
 	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$fault_mode = $(FAULT_MODE)' \
-	   -x emu/fault.gdb > $(BUILD)/fault.log 2>&1; \
+	   -x harness/faults/fault.gdb > $(BUILD)/fault.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
 	   [ "$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] && break; \
 	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
@@ -367,7 +367,7 @@ record-one: $(TARGET)
 	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$record_mode = $(RECORD_MODE)' \
-	   -x emu/record.gdb > $(BUILD)/rec.log 2>&1; \
+	   -x harness/faults/record.gdb > $(BUILD)/rec.log 2>&1; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
 	   grep -q 'boot   :' $(BUILD)/serial.log 2>/dev/null && break; \
 	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
@@ -410,7 +410,7 @@ test-poisoned: $(TARGET) $(BUILD)/poison.bin
 	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
 	 qpid=$$!; \
 	 sleep 1; \
-	 $(GDB) $(TARGET) -batch -x emu/poison.gdb > $(BUILD)/poison.log 2>&1; \
+	 $(GDB) $(TARGET) -batch -x harness/faults/poison.gdb > $(BUILD)/poison.log 2>&1; \
 	 found=0; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
 	   if grep -qF "$(SENTINEL)" $(BUILD)/serial.log 2>/dev/null; then found=1; break; fi; \

@@ -3,6 +3,6 @@
 .bss            4
 .data           0
 .init         162
-.rodata       620
+.rodata       712
 .stack       1024
-.text        1648
+.text        1824

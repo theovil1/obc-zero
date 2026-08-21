@@ -47,6 +47,33 @@
 #define TICK_CHECK_READS 64u
 #endif
 
+/*
+ * Timebase assertion.
+ *
+ * The criterion this satisfies asks that a change of machine model cannot
+ * silently rescale every deadline. It deliberately does NOT time an interval
+ * against the host clock, and the reason matters: under -icount guest time
+ * advances with instructions executed, not with the wall clock, so a host-timed
+ * measurement reports emulation speed and host load rather than the timebase.
+ * The number it produced would move with the machine that ran it.
+ *
+ * The deterministic anchor is the ratio between the two clocks the system
+ * already has. Under -icount a continuously executing core retires exactly
+ * (10^9 / 2^shift) / OBC_MTIME_HZ instructions per tick: 476.837 at shift=6.
+ * That figure changes if the timer frequency changes, if the shift changes, or
+ * if the machine changes — which is the whole set of events the criterion is
+ * guarding against.
+ *
+ * What it does not do is establish 32768 Hz in real-time terms. Under -icount
+ * there is no real time to compare against. The absolute figure rests on a
+ * host-timed measurement taken without -icount, recorded in ADR 0001, and it
+ * cannot be re-asserted from inside the guest. Stated here rather than left for
+ * someone to assume this check proves more than it does.
+ */
+#define OBC_MILLI_INSTR_PER_TICK 476837u
+#define OBC_MILLI_INSTR_TOLERANCE 4768u /* 1 percent */
+#define TIMEBASE_CHECK_TICKS 500u
+
 /* Injected by the build. See BUILD_HASH in the Makefile. */
 #ifndef OBC_BUILD_HASH
 #define OBC_BUILD_HASH "unknown"
@@ -75,6 +102,87 @@ extern uint32_t __stack_top[];
 #define STACK_PAINT 0xDEADBEEFu
 
 void obc_main(void);
+
+static inline uint32_t read_minstret(void)
+{
+    uint32_t v;
+    __asm__ volatile("csrr %0, minstret" : "=r"(v));
+    return v;
+}
+
+/*
+ * Instructions retired per machine-timer tick, in thousandths.
+ *
+ * 32-bit arithmetic throughout: a 64-bit division would pull __udivdi3 out of
+ * libgcc, which a freestanding link does not provide. The build fails loudly
+ * rather than silently, but the constraint is worth stating where it bites.
+ */
+static obc_status_t measure_instr_per_tick(uint32_t *out_milli)
+{
+    uint64_t t0;
+    uint64_t now;
+    uint32_t i0;
+    uint32_t dticks;
+    uint32_t dinstr;
+    uint32_t guard;
+    obc_status_t st;
+
+    st = obc_mtime_read(&t0);
+    if (st != OBC_OK) {
+        return st;
+    }
+    i0 = read_minstret();
+
+    /* Bounded: the loop cannot legitimately need more iterations than the
+     * instruction budget for the span it waits on. */
+    for (guard = 0u; guard < (TIMEBASE_CHECK_TICKS * 4096u); guard++) {
+        st = obc_mtime_read(&now);
+        if (st != OBC_OK) {
+            return st;
+        }
+        if ((uint32_t)(now - t0) >= TIMEBASE_CHECK_TICKS) {
+            dinstr = read_minstret() - i0;
+            dticks = (uint32_t)(now - t0);
+            *out_milli = (dinstr / dticks) * 1000u + ((dinstr % dticks) * 1000u) / dticks;
+            return OBC_OK;
+        }
+    }
+
+    return OBC_ERR_TIMEOUT;
+}
+
+static obc_status_t print_timebase_check(void)
+{
+    uint32_t milli = 0u;
+    obc_status_t st = measure_instr_per_tick(&milli);
+    uint32_t low = OBC_MILLI_INSTR_PER_TICK - OBC_MILLI_INSTR_TOLERANCE;
+    uint32_t high = OBC_MILLI_INSTR_PER_TICK + OBC_MILLI_INSTR_TOLERANCE;
+    obc_status_t w;
+
+    w = obc_uart_puts("base   : ");
+    if (w != OBC_OK) {
+        return w;
+    }
+    if (st != OBC_OK) {
+        (void)obc_uart_puts("FAULT unmeasurable\r\n");
+        return st;
+    }
+    w = obc_uart_put_u32(milli);
+    if (w == OBC_OK) {
+        w = obc_uart_puts(" milli-instr/tick, expect ");
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_put_u32(OBC_MILLI_INSTR_PER_TICK);
+    }
+    if (w != OBC_OK) {
+        return w;
+    }
+    if (milli < low || milli > high) {
+        (void)obc_uart_puts(" FAULT out of tolerance\r\n");
+        return OBC_ERR_INVALID;
+    }
+    return obc_uart_puts(" ok\r\n");
+}
 
 /*
  * Deepest point the stack has reached so far, in bytes, found by walking the
@@ -412,6 +520,9 @@ void obc_main(void)
     obc_fault_consume();
 
     tick_st = print_tick_check();
+    if (tick_st == OBC_OK) {
+        tick_st = print_timebase_check();
+    }
 
     /*
      * Sentinel. This exact string is what the host watches for to decide that

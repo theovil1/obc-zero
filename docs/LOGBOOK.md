@@ -269,7 +269,7 @@ every 36 hours at 32768 Hz, and under `-icount` the run is deterministic, so a
 given run either meets the window or never will. Never would leave a green test
 on a broken clock forever.
 
-`emu/carry.gdb` parks the counter below the boundary and pushes it across while
+`harness/faults/carry.gdb` parks the counter below the boundary and pushes it across while
 the reader sits between its two loads. The test no longer depends on the
 timebase at all, and it is the first time the injection primitives are used
 against a genuine defect rather than an intentionally broken build.
@@ -283,7 +283,7 @@ There are two naive orderings and they fail in opposite directions:
 | high then low | ~2^32 too small | jump backwards | yes |
 | low then high | ~2^32 too large | keep increasing | **no** |
 
-`emu/broken/mtime_naive.c` implements the second on purpose, and is caught:
+`harness/broken/mtime_naive.c` implements the second on purpose, and is caught:
 
 ```
 tick   : FAULT implausible jump of 0x00000001:0x00000000 ticks

@@ -68,25 +68,47 @@ this project fail at M8.
 2. The reserve is spent by explicit decision, never by drift.
 3. Anything that can live in flash lives in flash. Constant tables, lookup
    tables, and string literals belong in `.rodata`, which costs nothing here.
-   The flash budget is 4 MiB against 858 bytes used; RAM is the only scarce
-   resource on this board.
+   The flash budget is 4 MiB against 2698 bytes used, tracked in the Flash
+   section below; RAM is the only scarce resource on this board.
 4. No line may be met by making a buffer dynamic. There is no allocator and
    there will not be one.
 
 ## Current consumption
 
-Measured on commit `3ca4ce4` by `make measure`. See `docs/LOGBOOK.md` for the
+Measured on commit `9e807df` by `make measure`. See `docs/LOGBOOK.md` for the
 run that produced these numbers.
 
 | | Bytes |
 |---|---:|
 | `.data` | 0 |
-| `.bss` | 0 |
+| `.bss` | 4 |
 | Stack reserved | 1024 |
 | Stack peak observed | 64 |
-| **Total committed** | **1024 of 16384** |
+| `.noinit` (fault record) | 36 |
+| **Total committed** | **1064 of 16384** |
 
 Remaining unallocated after the planned lines above: 3328 B.
+
+## Flash
+
+Flash is not scarce here — 4 MiB against a four-figure image — and nothing in
+this section asks for it to be optimised. It exists so that growth stays an
+observed fact rather than a discovery.
+
+| | Bytes | Note |
+|---|---:|---|
+| M0, first boot | 874 | banner and UART only |
+| M1, timer and traps | 2698 | tripled on one milestone |
+| **Alert threshold** | **262144** | **arbitrary, and declared so** |
+| Budget | 4194304 | the link script's FLASH region |
+
+The alert threshold is one sixteenth of the region. It is not derived from
+anything: it is a round number chosen so that crossing it forces a conversation
+rather than passing unnoticed. Revise it with a reason, not with a shrug.
+
+M6, M7 and M8 each add tables and fixed-layout frames, all of which belong in
+`.rodata` and therefore in flash. Rule 3 below actively pushes data here, so the
+line will move. Tracking it costs one row.
 
 ## Enforcement
 
