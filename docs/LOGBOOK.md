@@ -5,6 +5,94 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — M6 mesuré sur `4a35efc`, et le défaut n'était pas dans la télémétrie
+
+Mesure prise sur l'arbre propre de `4a35efc`, après le commit qui la produit.
+
+| | Valeur |
+|---|---:|
+| `.text` | 8014 |
+| `.data` | 16 |
+| `.bss` (agrégé, pile et gardes comprises) | 2020 |
+| RAM totale | 2048 B sur 16384 |
+| Pile, pic observé | 112 B sur 1024 réservés |
+| Trame de télémétrie | 45 octets |
+| Ligne M6 consommée | 104 B sur 2048 |
+| `task telemetry`, pire dispatch | 1504 instructions sur 3000 |
+
+Le budget de la tâche est fixé sur cette mesure, pas sur une estimation. Il est
+passé de 1633 à 1504 quand la trame a cessé de sortir octet par octet : une
+écriture groupée sur le port descendant coûte moins que 45 appels séparés.
+
+### Ce que le jalon a réellement trouvé
+
+L'ADR 0008 ouvrait par une consigne : à ce jalon, la question n'est plus « cette
+fonction est-elle correcte » mais « que se passe-t-il quand l'autre moitié
+échoue ». Elle listait quatre endroits où poser la question. **Le défaut n'était
+dans aucun des quatre.**
+
+Les trames binaires sortaient sur la console texte. Le code de vol était correct,
+le décodeur était correct, et trois tests sans rapport — `test-wdt`, `test-trap`,
+`test-record` — se sont mis à échouer. Pas sur leur propriété : leurs assertions
+lisent le journal série comme du texte, `grep` a commencé à répondre « fichier
+binaire » et chaque extraction de valeur a reçu le vide. Trois sous-systèmes
+déclarés cassés parce qu'un quatrième s'était mis à parler une autre langue sur
+leur ligne.
+
+Ce qui compte pour la suite : la liste des quatre endroits n'a servi à rien, et
+poser la question a tout changé. Deviner d'avance où deux moitiés vont se heurter
+ne marche pas ; c'est l'habitude de demander « et si l'autre côté lâche » qui
+paie, pas la précision de la prédiction.
+
+### Deux faux verts, dont un dans mon propre harnais
+
+Le premier : les cibles de preuve d'échec annonçaient PASS sur une édition de
+liens périmée. Changer une variable de source change la liste d'objets sans
+changer aucun horodatage, donc make trouvait `build/obc.elf` plus récent que ses
+nouveaux prérequis et sautait le lien. Le cas tournait contre l'image
+précédente — c'est-à-dire que le validateur de vol était testé contre lui-même et
+certifiait qu'un build cassé était refusé. Corrigé par un `clean` préalable, qui
+est la convention déjà en place pour les autres variantes cassées.
+
+Le second a été évité, et seulement parce qu'on m'a dit de le chercher : UART1
+est déclaré dans l'espace d'adressage de la machine, ce qui ne garantit pas qu'il
+soit modélisé. Un périphérique qui accepte les écritures dans le vide aurait
+donné un test vert sur une trame jamais émise. Vérifié avant de construire quoi
+que ce soit dessus : un octet écrit au débogueur, le même octet relu dans la
+capture hôte.
+
+### Un contrôle placé à la mauvaise couche
+
+« Au moins une tâche doit pouvoir atteindre le barreau 2 » était d'abord un
+contrôle d'exécution dans `obc_tlm_init()`. Il couplait la disposition des trames
+à la forme de la table des tâches, donc les builds cassés du harnais — dont les
+tables n'ont aucun `reset_fn` — basculaient tout le système en mode dégradé, et
+`test-sched-overrun` et `test-loop` échouaient sur une propriété qu'ils ne
+testent pas.
+
+Le fond du problème : un véhicule en vol ne peut pas se faire pousser un
+sous-système. Un contrôle d'exécution ne pouvait donc que dégrader un système qui
+marche, à cause d'une erreur de configuration de build. C'est une propriété de la
+configuration de vol, et elle est vérifiée par l'hôte contre le binaire de vol.
+
+### Ce qui n'est pas couvert
+
+Le budget de la tâche télémétrie ne tient que parce que l'UART émulé ne bloque
+jamais. `obc_uart_putc` réessaie jusqu'à sa limite bornée, donc un seul octet
+bloqué coûte plus que le budget entier : dépassement, escalade, et au barreau 3
+une réinitialisation machine causée par une liaison descendante congestionnée.
+Les deux moitiés sont correctes séparément. QEMU accepte chaque octet
+immédiatement, donc aucune campagne sur cette machine ne peut exercer le chemin,
+et relever le budget reviendrait à régler un seuil contre un cas que rien ne
+teste. Noté au backlog, pas traité.
+
+Le capteur qui oscille entre valeurs plausibles n'est pas détecté et ne le sera
+pas ici. Le critère est coché pour « hors plage ou bloqué », et le PLAN dit
+lequel des trois modes il couvre — pour que « capteur menteur » ne finisse pas
+par vouloir dire « capteur hors plage » sans que personne ne l'ait décidé.
+
+---
+
 ## 2026-08-21 — The article's own opening was wrong, and my review did not catch it
 
 Not a measurement. A small thing worth the entry because of where it happened.
