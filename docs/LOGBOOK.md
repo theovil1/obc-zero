@@ -5,6 +5,108 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M1 closed: deliberate reset, and a guard for what the compiler adds
+
+**Measured commit:** `76f7ca8c03fd7536db6145d7a6aa1fbd59e1e317`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### A deliberate reset must not look like a fault
+
+`obc_fault_reset_with_cause` records `OBC_RESET_REQUESTED` and resets through
+the same AON watchdog, with the same payload-checksum-magic order. Fourth trap
+mode added, and the assertion is two-sided: the line must say "requested" **and**
+must not contain "trap". A one-sided assertion would pass on a record that said
+both.
+
+```
+mode 4  ok - requested (watchdog, nothing was wrong)
+```
+
+The function is `KEEP`'d in the link script rather than given a caller.
+`--gc-sections` dropped it, because nothing in flight code calls it yet — M5
+owns the policy that decides when to ask for a reset. Inventing a call site to
+satisfy the linker would have misrepresented which milestone owns what, and the
+comment in the link script says so.
+
+### The rule "32-bit arithmetic everywhere" was too weak to hold
+
+Yesterday's `__udivdi3` finding produced a discipline. A discipline is not a
+property. The compiler emits calls the source never mentions: 64-bit division
+and shift, `memcpy` from a large struct initialiser, `memset` from a large
+zeroing. None of them appear in a grep of `flight/`.
+
+A freestanding link already fails on them, loudly, which is correct. What it
+cannot catch is **the fix**: adding `-lgcc` or `-lc` to make the error go away
+pulls the helper in and the build goes green carrying a dependency nobody
+decided to take.
+
+Demonstrated rather than argued. With a 64-bit division in `obc_main`:
+
+| Link | Result |
+|---|---|
+| `-nostdlib` alone | fails: `undefined reference to __udivdi3` |
+| `-nostdlib -lgcc` | **succeeds**, `__udivdi3` in the symbol table |
+| `make deps-check` on that image | **fails**, naming the symbol |
+
+`deps-check` runs on every `make measure`. The undefined set must be empty and
+no helper may appear anywhere in the symbol table. Same mechanism as the size
+reference: a discipline converted into something checked every time.
+
+### The timebase message names both hypotheses
+
+The ratio is fixed jointly by the timer frequency and the `-icount` shift, so it
+cannot distinguish them — and the *nominal* reason for it to move is someone
+deliberately changing the shift. A message blaming the timer would send the next
+person hunting a regression that does not exist:
+
+```
+base   : 3809426 milli-instr/tick, expect 476837 FAULT out of tolerance
+         either -icount shift is not 6 (the usual cause, and deliberate)
+         or the machine timer is not 32768 Hz (a real regression)
+```
+
+An assertion that fires correctly but explains itself wrongly costs as much time
+as one that does not fire.
+
+### The M5 counter needs its own record, not a field
+
+Following through on the reset-loop question rather than leaving it at "the
+persistent cause is not enough". If the counter must survive `consume()`, it
+cannot live under the cause's magic and checksum: clearing the record clears the
+commit point and everything inside goes with it. Sharing a checksum is worse —
+updating the counter would invalidate the cause's, and vice versa.
+
+So: a second record in `.noinit`, with its own magic and checksum. Two valid
+structures with different lifetimes, one consumed every boot and one persisting
+across many. A paragraph now against a rewrite of the record layout and every
+assembly offset midway through M5.
+
+### Measurement
+
+`make measure` on `76f7ca8`:
+
+```
+   text    data     bss     dec     hex filename
+   2978       0    1064    4042     fca build/obc.elf
+
+size: matches docs/size-reference.txt
+deps: no compiler or library helpers linked in
+```
+
+Flash 2978 B of 4 MiB, RAM 1064 B of 16384 B. Eight targets green: `test`,
+`test-poisoned`, `test-carry`, `test-carry-broken`, `test-stability`,
+`test-trap` (four modes), `test-record` (three modes), `deps-check`.
+
+### M1 status
+
+Every acceptance criterion is met except the one naming `harness`, which stays
+open deliberately: the injectors moved to `harness/faults/` during this
+milestone, but the run lifecycle and the assertions are still in the Makefile
+until M9 consolidates them into `harness/runner/`. The tick should describe the
+structure, not only the behaviour.
+
+---
+
 ## 2026-08-20 — The thesis, demonstrated on my own code
 
 **Measured commit:** `1d767f97600c91d834a7b47b8323485e2e75ba32`
