@@ -82,7 +82,7 @@ static void task_telemetry(void)
  * corruptions until a second one made the first unrecoverable.
  *
  * The status is discarded deliberately. An unresolved vote is already counted
- * in obc_critical_unresolved and has already driven the system degraded through
+ * in obc_critical_failed_votes and has already driven the system degraded through
  * obc_mode_is_safe; there is nothing this task can add by returning it, and it
  * has no caller to return it to.
  */

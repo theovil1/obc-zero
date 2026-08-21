@@ -37,7 +37,7 @@ GDB = "gdb-multiarch"
 MACHINE = "sifive_e"
 ICOUNT = "shift=6"
 SENTINEL = "boot   : ok"
-STATE_RE = re.compile(r"repairs=(\d+) unresolved=(\d+) mode=(\d+)")
+STATE_RE = re.compile(r"repairs=(\d+) failed_votes=(\d+) mode=(\d+)")
 
 COPY_NAMES = ("a", "b", "c")
 
@@ -63,7 +63,7 @@ class Verdict:
     injection: Injection
     ok: bool
     repairs: int
-    unresolved: int
+    failed_votes: int
     mode: int
     reason: str
 
@@ -77,7 +77,7 @@ class Tally:
     by_copy: dict[str, int] = field(default_factory=dict)
     by_depth: dict[int, int] = field(default_factory=dict)
     repaired: int = 0
-    unresolved: int = 0
+    failed_votes: int = 0
 
 
 def free_port() -> int:
@@ -180,8 +180,8 @@ def run_one(elf: Path, build: Path, inj: Injection, timeout: float) -> Verdict:
                 f"target remote localhost:{port}",
                 "-ex",
                 (
-                    'printf "repairs=%u unresolved=%u mode=%u\\n", '
-                    "obc_critical_repairs, obc_critical_unresolved, obc_mode"
+                    'printf "repairs=%u failed_votes=%u mode=%u\\n", '
+                    "obc_critical_repairs, obc_critical_failed_votes, obc_mode"
                 ),
             ],
             capture_output=True,
@@ -200,19 +200,19 @@ def run_one(elf: Path, build: Path, inj: Injection, timeout: float) -> Verdict:
     if not found:
         return Verdict(inj, False, 0, 0, 0, "could not read the voter back")
 
-    repairs, unresolved, mode = (int(g) for g in found.groups())
+    repairs, failed_votes, mode = (int(g) for g in found.groups())
 
     # One corrupted copy must leave a majority, so it is repaired and nothing
     # about the system's behaviour changes. Two must not produce a verdict at
     # all, and the caller must fail safe rather than trust a survivor.
     if inj.copies == 1:
-        ok = repairs >= 1 and unresolved == 0 and mode == 0
+        ok = repairs >= 1 and failed_votes == 0 and mode == 0
         reason = "" if ok else "a single corruption was not silently repaired"
     else:
-        ok = unresolved >= 1 and mode == 1
+        ok = failed_votes >= 1 and mode == 1
         reason = "" if ok else "two corruptions still produced a verdict"
 
-    return Verdict(inj, ok, repairs, unresolved, mode, reason)
+    return Verdict(inj, ok, repairs, failed_votes, mode, reason)
 
 
 def bar(done: int, total: int, width: int = 34) -> str:
@@ -249,7 +249,7 @@ def render(tally: Tally, total: int, started: float, live: bool) -> str:
         f"  passed   {passed:>5}          elapsed  {clock(elapsed):>8}",
         f"  failed   {len(tally.failures):>5}          remaining{clock(remaining):>8}",
         f"  rate     {rate:>5.2f}/s        repairs  {tally.repaired:>8}",
-        f"  {'':>5}                unresolved{tally.unresolved:>7}",
+        f"  {'':>5}                votes ko {tally.failed_votes:>8}",
         "",
         f"  corrupted copy   {copies}",
         f"  corruption depth {depth}",
@@ -316,7 +316,7 @@ def write_report(
         lines.append(f"| {n} copy corrupted | {tally.by_depth.get(n, 0)} |")
     lines += [
         f"| repairs performed | {tally.repaired} |",
-        f"| votes unresolved | {tally.unresolved} |",
+        f"| failed votes | {tally.failed_votes} |",
         "",
     ]
 
@@ -410,7 +410,7 @@ def main(argv: list[str]) -> int:
         tally.by_copy[name] = tally.by_copy.get(name, 0) + 1
         tally.by_depth[inj.copies] = tally.by_depth.get(inj.copies, 0) + 1
         tally.repaired += verdict.repairs
-        tally.unresolved += verdict.unresolved
+        tally.failed_votes += verdict.failed_votes
         if not verdict.ok:
             tally.failures.append(verdict)
 

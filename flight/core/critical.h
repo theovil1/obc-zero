@@ -75,10 +75,22 @@ extern const uint32_t obc_critical_item_count;
 /* The one item the criterion in ADR 0006 admits today: the operating mode. */
 extern const obc_critical_item_t obc_critical_mode;
 
-/* Repairs performed, and votes that could not be resolved. Both are reported:
- * a system that silently repaired a thousand times is not healthy. */
+/*
+ * Repairs performed, and votes that could not be resolved.
+ *
+ * **`failed_votes` counts attempts, not events**, and the name now says so.
+ * Measured over the M4 campaign: one irreparable corruption produces exactly 66
+ * of them in a sixteen-frame window, because every subsequent read votes again
+ * and fails again. Over a long soak the same single corruption reads as
+ * millions.
+ *
+ * That is the right thing to count for "is the voter being asked and failing",
+ * and the wrong thing for "how many times did the system enter an unresolvable
+ * state" — which is what an escalation ladder needs. The second counter is M5's
+ * to add; this commit only stops the first one claiming to be it.
+ */
 extern volatile uint32_t obc_critical_repairs;
-extern volatile uint32_t obc_critical_unresolved;
+extern volatile uint32_t obc_critical_failed_votes;
 
 /* Writes all three copies of one item, and their checksums. */
 void obc_critical_set(const obc_critical_item_t *item, uint32_t value);

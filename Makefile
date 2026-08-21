@@ -488,24 +488,24 @@ voter-one: $(TARGET)
 	 done; \
 	 timeout 20 $(GDB) $(TARGET) -batch -ex 'set confirm off' \
 	   -ex 'set architecture riscv:rv32' -ex 'target remote localhost:1234' \
-	   -ex 'printf "repairs=%u unresolved=%u mode=%u\n", obc_critical_repairs, obc_critical_unresolved, obc_mode' \
+	   -ex 'printf "repairs=%u failed_votes=%u mode=%u\n", obc_critical_repairs, obc_critical_failed_votes, obc_mode' \
 	   > $(BUILD)/crit-state.txt 2>&1; \
 	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	 grep -qF 'CRITICAL-INJECTED' $(BUILD)/crit.log \
 	   || { echo "FAIL: nothing was corrupted, so this proved nothing"; \
 	        tail -5 $(BUILD)/crit.log; exit 1; }; \
-	 state=$$(grep -o 'repairs=[0-9]* unresolved=[0-9]* mode=[0-9]*' $(BUILD)/crit-state.txt); \
+	 state=$$(grep -o 'repairs=[0-9]* failed_votes=[0-9]* mode=[0-9]*' $(BUILD)/crit-state.txt); \
 	 if [ "$(CRIT_N)" = 1 ]; then \
 	   echo "$$state" | grep -qE 'repairs=[1-9]' \
 	     || { echo "FAIL: a single corrupted copy was not repaired ($$state)"; exit 1; }; \
-	   echo "$$state" | grep -qF 'unresolved=0' \
+	   echo "$$state" | grep -qF 'failed_votes=0' \
 	     || { echo "FAIL: a single corruption should still leave a majority ($$state)"; exit 1; }; \
 	   echo "$$state" | grep -qF 'mode=0' \
 	     || { echo "FAIL: a repaired corruption changed behaviour ($$state)"; exit 1; }; \
 	   grep -qF '30 dispatches' $(BUILD)/serial.log \
 	     || { echo "FAIL: a repaired corruption changed the dispatch count"; exit 1; }; \
 	 else \
-	   echo "$$state" | grep -qE 'unresolved=[1-9]' \
+	   echo "$$state" | grep -qE 'failed_votes=[1-9]' \
 	     || { echo "FAIL: two corrupted copies still produced a verdict ($$state)"; exit 1; }; \
 	   echo "$$state" | grep -qF 'mode=1' \
 	     || { echo "FAIL: an unresolvable vote did not fail safe ($$state)"; exit 1; }; \

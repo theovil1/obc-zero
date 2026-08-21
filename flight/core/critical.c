@@ -35,7 +35,7 @@ const uint32_t obc_critical_item_count =
     (uint32_t)(sizeof(obc_critical_items) / sizeof(obc_critical_items[0]));
 
 volatile uint32_t obc_critical_repairs;
-volatile uint32_t obc_critical_unresolved;
+volatile uint32_t obc_critical_failed_votes;
 
 static uint32_t checksum_of(uint32_t value, uint32_t seed)
 {
@@ -127,7 +127,7 @@ static obc_status_t vote(const obc_critical_item_t *item, uint32_t *out)
      * there is no right answer available: returning one of the survivors would
      * be returning a value the system cannot vouch for. Say so instead.
      */
-    obc_critical_unresolved++;
+    obc_critical_failed_votes++;
     return OBC_ERR_UNSTABLE;
 }
 
