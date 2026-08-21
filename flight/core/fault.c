@@ -19,6 +19,10 @@
  */
 obc_fault_record_t obc_fault_record __attribute__((section(".noinit"), used));
 
+/* Zero-initialised: OBC_RESET_UNKNOWN is 0, so a boot that never latches it
+ * reports "unknown" rather than whatever the RAM held. */
+volatile uint32_t obc_reset_cause_previous;
+
 /*
  * The assembly handler addresses this structure by hardcoded byte offsets. If a
  * field moves, the handler writes to the wrong word and the failure is silent

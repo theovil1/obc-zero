@@ -93,10 +93,10 @@ static void task_audit(void)
 }
 
 const obc_task_t obc_task_table[] = {
-    { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET, T0_ESSENTIAL },
-    { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET, T1_ESSENTIAL },
-    { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET, T2_ESSENTIAL },
-    { "audit",        task_audit,        T3_PERIOD, T3_BUDGET, T3_ESSENTIAL },
+    { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET, T0_ESSENTIAL, 0 },
+    { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET, T1_ESSENTIAL, 0 },
+    { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET, T2_ESSENTIAL, 0 },
+    { "audit",        task_audit,        T3_PERIOD, T3_BUDGET, T3_ESSENTIAL, 0 },
 };
 
 const uint32_t obc_task_count =

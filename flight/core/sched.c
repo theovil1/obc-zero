@@ -107,14 +107,28 @@ static void dispatch(uint32_t index, uint32_t frame)
     if (used > task->budget_instr) {
         state->overruns++;
         /*
-         * Climb. First overrun suspends the task for the next frame; a second
-         * one means suspending did not help, so the ladder goes to its top
-         * rung. Rung 2 is skipped because it is empty, which is visible here
-         * rather than hidden behind a helper that pretends to try it.
+         * Climb. First overrun suspends the task; a second one means suspending
+         * did not help, so the ladder tries the task's own subsystem; a third
+         * means that did not help either.
+         *
+         * A task with no subsystem skips rung 2 rather than spending an
+         * escalation step on a call that would do nothing — the rung is absent
+         * for that task, and absent is visible where hollow is not. Which is
+         * ADR 0007's reasoning for leaving the rung empty at M5, applied per
+         * task now that some tasks can fill it.
          */
-        obc_recover_escalate(state->overruns == 1u ? OBC_RUNG_SUSPEND_TASK
-                                                   : OBC_RUNG_RESET_MACHINE,
-                             index, frame);
+        {
+            uint32_t rung;
+
+            if (state->overruns == 1u) {
+                rung = OBC_RUNG_SUSPEND_TASK;
+            } else if (state->overruns == 2u && task->reset_fn != 0) {
+                rung = OBC_RUNG_RESET_SUBSYSTEM;
+            } else {
+                rung = OBC_RUNG_RESET_MACHINE;
+            }
+            obc_recover_escalate(rung, index, frame);
+        }
     }
 }
 

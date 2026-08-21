@@ -30,14 +30,18 @@
 /*
  * The rungs.
  *
- * Rung 2 is declared and does nothing. A subsystem reset needs a subsystem with
- * its own state, and none exists before M6 and M8. Inventing something to put
- * here would read as escalation while doing nothing, which is visible only in a
- * campaign; an empty rung is visible in the ladder itself.
+ * Rung 2 was declared empty at M5 and is filled at M6, per ADR 0008: a subsystem
+ * reset needs a subsystem with its own state, and telemetry is the first that
+ * has any. The action is not defined here — it is the `reset_fn` the task
+ * declares in the table, so a task owning no state cannot reach this rung and
+ * escalates from 1 straight to 3.
+ *
+ * That is the M5 reasoning kept rather than discarded. An empty rung is visible
+ * in the ladder; a hollow one is visible only in a campaign, late.
  */
 #define OBC_RUNG_NONE 0u
 #define OBC_RUNG_SUSPEND_TASK 1u
-#define OBC_RUNG_RESET_SUBSYSTEM 2u /* empty until M6/M8, nothing selects it */
+#define OBC_RUNG_RESET_SUBSYSTEM 2u /* the task's own reset_fn, M6 onwards */
 #define OBC_RUNG_RESET_MACHINE 3u
 
 /*

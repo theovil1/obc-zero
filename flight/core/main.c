@@ -18,6 +18,7 @@
 #include "core/status.h"
 #include "hal/mtime.h"
 #include "hal/uart.h"
+#include "tlm/frame.h"
 
 /*
  * Clock plausibility bound.
@@ -642,6 +643,9 @@ void obc_main(void)
     {
         uint32_t previous = OBC_RESET_UNKNOWN;
         OBC_IGNORE(obc_fault_validate(&previous));
+        /* Latched before the record is consumed below, which destroys it.
+         * Telemetry reports this in every frame. */
+        obc_reset_cause_previous = previous;
         obc_mode_restore(previous);
     }
     obc_fault_consume();
@@ -668,6 +672,34 @@ void obc_main(void)
      */
     if (boot_rung == OBC_RUNG_RESET_MACHINE) {
         obc_recover_escalate(OBC_RUNG_RESET_MACHINE, 0u, 0u);
+    }
+
+    /*
+     * The descriptor audit, before the executive can dispatch telemetry once.
+     *
+     * It refuses rather than warns: a layout that does not describe the frame
+     * produces frames the host decodes into plausible wrong numbers, and a
+     * campaign would publish them as measurements. The system goes degraded and
+     * says so in text, which is the channel that does not depend on the layout
+     * being right.
+     */
+    {
+        obc_status_t tlm_st = obc_tlm_init();
+
+        if (tlm_st != OBC_OK) {
+            if (st == OBC_OK) {
+                st = obc_uart_puts("tlm    : LAYOUT AUDIT FAILED, not emitting\r\n");
+            }
+            obc_mode_enter_safe(OBC_SAFE_TELEMETRY);
+        } else if (st == OBC_OK) {
+            st = obc_uart_puts("tlm    : layout ok, frame ");
+            if (st == OBC_OK) {
+                st = obc_uart_put_u32(obc_tlm_frame_len);
+            }
+            if (st == OBC_OK) {
+                st = obc_uart_puts(" bytes\r\n");
+            }
+        }
     }
 
     tick_st = print_tick_check();

@@ -74,9 +74,25 @@ MTIME_SRC ?= flight/hal/mtime.c
 # conformance and ordering assertions detect something.
 SCHED_SRC ?= flight/core/sched.c
 
+# The telemetry sources, selectable one at a time so a broken variant replaces
+# exactly the thing under test. A single TLM_SRC would mean swapping the sensor
+# validator also swapped the frame packer, and a failure could not be attributed.
+TLM_FRAME_SRC ?= flight/tlm/frame.c
+TLM_SENSOR_SRC ?= flight/tlm/sensor.c
+TLM_SRC := $(TLM_FRAME_SRC) $(TLM_SENSOR_SRC)
+
 # TASKS_SRC selects the task table. test-sched-overrun swaps in one whose budget
 # is far below what its task costs.
 TASKS_SRC ?= flight/core/tasks.c
+
+# The two serial ports, in the order QEMU assigns them: the first -serial is
+# UART0 and the second is UART1. Named here rather than repeated, because a
+# target that forgets the second one gets a downlink writing into nothing and a
+# capture that is empty rather than wrong — which reads as "no frames" and not
+# as "misconfigured run".
+CONSOLE_LOG = $(BUILD)/serial.log
+DOWNLINK_BIN = $(BUILD)/tlm.bin
+PORTS = -serial file:$(CONSOLE_LOG) -serial file:$(DOWNLINK_BIN)
 
 SRC_C := flight/core/main.c \
          flight/core/critical.c \
@@ -86,6 +102,7 @@ SRC_C := flight/core/main.c \
          $(TASKS_SRC) \
          flight/core/fault.c \
          $(MTIME_SRC) \
+         $(TLM_SRC) \
          flight/hal/uart.c
 SRC_S := flight/boot/start.S \
          flight/boot/trap.S
@@ -247,7 +264,7 @@ run: $(TARGET)
 test: $(TARGET)
 	@echo "smoke: boot banner"
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
-	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none -serial file:$(BUILD)/serial.log \
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none $(PORTS) \
 	    -kernel $(TARGET) & \
 	 qpid=$$!; \
 	 found=0; \
@@ -278,7 +295,7 @@ CARRY_LINE = $(MTIME_SRC):$(shell grep -n 'CARRY-INJECT' $(MTIME_SRC) | cut -d: 
 define run_carry
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; \
 	 sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$carry_line = "$(CARRY_LINE)"' \
@@ -371,7 +388,7 @@ TRACE_CHECK := harness/runner/trace_check.py
 define dump_trace
 	@rm -f $(1) $(BUILD)/serial.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s & \
+	    $(PORTS) -kernel $(TARGET) -s & \
 	 qpid=$$!; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
 	   grep -qF "$(SENTINEL)" $(BUILD)/serial.log 2>/dev/null && break; \
@@ -458,7 +475,7 @@ test-wdt: $(TARGET)
 	@echo "wdt: a hung executive is reset by the hardware backstop"
 	@rm -f $(BUILD)/serial.log $(BUILD)/hang.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 timeout 60 $(GDB) $(TARGET) -batch -x harness/faults/hang.gdb \
 	   > $(BUILD)/hang.log 2>&1; \
@@ -489,7 +506,7 @@ test-loop:
 	    $(TARGET) >/dev/null
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) & \
+	    $(PORTS) -kernel $(TARGET) & \
 	 qpid=$$!; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 60 ))); do \
 	   grep -qF 'mode   : SAFE' $(BUILD)/serial.log 2>/dev/null && break; \
@@ -536,7 +553,7 @@ test-voter: $(TARGET)
 voter-one: $(TARGET)
 	@rm -f $(BUILD)/serial.log $(BUILD)/crit.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 timeout 40 $(GDB) $(TARGET) -batch \
 	   -ex 'set $$critical_copies = $(CRIT_N)' \
@@ -619,7 +636,7 @@ safe-one: $(TARGET)
 	@printf "  %-9s " "$(WHICH)"
 	@rm -f $(BUILD)/serial.log $(BUILD)/safe.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 if [ "$(WHICH)" = trap ]; then \
 	   timeout 40 $(GDB) $(TARGET) -batch -ex 'set $$fault_mode = 1' \
@@ -652,7 +669,7 @@ safe-clock:
 	    $(TARGET) >/dev/null
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) & \
+	    $(PORTS) -kernel $(TARGET) & \
 	 qpid=$$!; \
 	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
 	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
@@ -755,7 +772,7 @@ test-trap: $(TARGET)
 trap-one: $(TARGET)
 	@rm -f $(BUILD)/serial.log $(BUILD)/fault.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$fault_mode = $(FAULT_MODE)' \
 	   -x harness/faults/fault.gdb > $(BUILD)/fault.log 2>&1; \
@@ -799,7 +816,7 @@ test-record: $(TARGET)
 record-one: $(TARGET)
 	@rm -f $(BUILD)/serial.log $(BUILD)/rec.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; sleep 1; \
 	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$record_mode = $(RECORD_MODE)' \
 	   -x harness/faults/record.gdb > $(BUILD)/rec.log 2>&1; \
@@ -842,7 +859,7 @@ test-poisoned: $(TARGET) $(BUILD)/poison.bin
 	@echo "smoke: boot banner on poisoned RAM, seed=$(POISON_SEED)"
 	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
 	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
-	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
 	 qpid=$$!; \
 	 sleep 1; \
 	 $(GDB) $(TARGET) -batch -x harness/faults/poison.gdb > $(BUILD)/poison.log 2>&1; \
@@ -896,3 +913,158 @@ clean:
 	rm -rf $(BUILD)
 
 -include $(DEP)
+
+# --- M6: telemetry -------------------------------------------------------- #
+
+# Nominal. No injection: the frames must decode against the layout read from the
+# binary, and nothing rejected may appear as a value.
+#
+# Note what this does *not* prove. With no harness attached the mock backend
+# holds whatever survived reset, so both sensors are correctly reported as
+# untrustworthy — which exercises "flagged, not propagated" and says nothing
+# about "unflagged means real". That direction needs an injected good sensor,
+# which is what test-tlm-sensors does.
+test-tlm: $(TARGET)
+	@rm -f $(CONSOLE_LOG) $(DOWNLINK_BIN)
+	@timeout $(RUN_TIMEOUT_S) $(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    $(PORTS) -kernel $(TARGET) >/dev/null 2>&1 || true
+	@grep -qF 'tlm    : layout ok' $(CONSOLE_LOG) \
+	  || { echo "FAIL: the descriptor audit did not pass, so no frame is trustworthy"; \
+	       exit 1; }
+	@python3 harness/runner/tlm_check.py --elf $(TARGET) --capture $(DOWNLINK_BIN)
+
+# One injected sensor case. $(SENSOR_IDX) is the sensor, $(SENSOR_MODE) is which
+# of the three failures from ADR 0008 to produce, $(SENSOR_EXPECT) is the
+# property the host must then be able to demonstrate.
+tlm-one: $(TARGET)
+	@rm -f $(CONSOLE_LOG) $(DOWNLINK_BIN) $(BUILD)/tlm-inject.log
+	@touch $(CONSOLE_LOG) $(DOWNLINK_BIN)
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    $(PORTS) -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 timeout 60 $(GDB) $(TARGET) -batch \
+	   -ex 'set $$sensor_index = $(SENSOR_IDX)' \
+	   -ex 'set $$sensor_mode = $(SENSOR_MODE)' \
+	   -x harness/faults/sensor.gdb > $(BUILD)/tlm-inject.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(CONSOLE_LOG) 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'SENSOR-INJECT' $(BUILD)/tlm-inject.log \
+	   || { echo "FAIL: nothing was injected, so this proved nothing"; \
+	        tail -5 $(BUILD)/tlm-inject.log; exit 1; }; \
+	 python3 harness/runner/tlm_check.py --elf $(TARGET) --capture $(DOWNLINK_BIN) \
+	   --expect $(SENSOR_EXPECT) --sensor $(SENSOR_IDX)
+
+# Every detectable failure, on every sensor.
+#
+# Both sensors, because a validator exercised on one proves that one: the
+# descriptor is indexed, and an index used once is an index that has never been
+# shown to be applied per sensor. M3 produced exactly that failure with safe
+# mode's clock entry, on one of three call sites.
+test-tlm-sensors: $(TARGET)
+	@echo "sensor cases, per sensor and per failure mode"
+	@for s in 0 1; do \
+	   for c in "0 honest" "1 range" "2 stuck"; do \
+	     set -- $$c; \
+	     printf "  sensor %s %-7s " $$s $$2; \
+	     $(MAKE) --no-print-directory SENSOR_IDX=$$s SENSOR_MODE=$$1 \
+	       SENSOR_EXPECT=$$2 tlm-one || exit 1; \
+	   done; \
+	 done
+	@echo "PASS"
+
+# --- M6: the detectors, shown failing ------------------------------------- #
+#
+# A test that has never failed has not been shown to work. Each of these builds
+# an image with one detector deliberately removed and requires the corresponding
+# check to REFUSE. A green here would mean the check passes on a broken build,
+# which is worse than no check at all.
+
+# A validator that rejects nothing. The range and stuck cases must both fail.
+#
+# `clean` before every variant, and it is not caution. Switching TLM_SENSOR_SRC
+# changes the object list without changing any timestamp, so make finds
+# build/obc.elf newer than its new prerequisites and skips the link entirely —
+# and the case then runs against the previous image. The first version of this
+# target did exactly that and reported PASS while testing the flight validator
+# against itself: a green that certified nothing, which is the failure this whole
+# section exists to prevent.
+test-tlm-blind-broken:
+	@echo "sensor validator with both detectors removed"
+	@for c in "1 range" "2 stuck"; do \
+	   set -- $$c; \
+	   printf "  %-6s " $$2; \
+	   $(MAKE) --no-print-directory clean >/dev/null; \
+	   if $(MAKE) --no-print-directory TLM_SENSOR_SRC=harness/broken/sensor_blind.c \
+	        SENSOR_IDX=0 SENSOR_MODE=$$1 SENSOR_EXPECT=$$2 tlm-one >/dev/null 2>&1; then \
+	     echo "FAIL: a validator that rejects nothing passed the $$2 check"; exit 1; \
+	   fi; \
+	   echo "refused, as it must"; \
+	 done
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@echo "PASS"
+
+# A validator that rejects everything. Only the second direction can catch it,
+# and this is the target that proves the second direction is doing work.
+test-tlm-paranoid-broken:
+	@echo "sensor validator that rejects every reading"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@printf "  honest "
+	@if $(MAKE) --no-print-directory TLM_SENSOR_SRC=harness/broken/sensor_paranoid.c \
+	      SENSOR_IDX=0 SENSOR_MODE=0 SENSOR_EXPECT=honest tlm-one >/dev/null 2>&1; then \
+	   echo "FAIL: a validator that flags good readings passed the honest check,"; \
+	   echo "      so only the 'bad is flagged' direction is being tested"; exit 1; \
+	 fi
+	@echo "refused, as it must"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@echo "PASS"
+
+# A descriptor table citing a wrong offset. The audit must refuse before a single
+# frame is emitted, and the announcement must come from the flight software.
+test-tlm-layout-broken:
+	@echo "descriptor table with one wrong offset"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory TLM_FRAME_SRC=harness/broken/tlm_layout_wrong.c \
+	   build >/dev/null 2>&1
+	@rm -f $(BUILD)/tlm-broken.bin
+	@timeout $(RUN_TIMEOUT_S) $(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/console-broken.log -serial file:$(BUILD)/tlm-broken.bin -kernel $(TARGET) >/dev/null 2>&1 || true
+	@grep -qF 'LAYOUT AUDIT FAILED' $(BUILD)/console-broken.log \
+	  || { echo "FAIL: a table with a wrong offset passed its own audit"; \
+	       $(MAKE) --no-print-directory clean >/dev/null; exit 1; }
+	@if python3 harness/runner/tlm_check.py --elf $(TARGET) \
+	     --capture $(BUILD)/tlm-broken.bin >/dev/null 2>&1; then \
+	   echo "FAIL: frames were emitted against a layout that failed its audit"; \
+	   $(MAKE) --no-print-directory clean >/dev/null; exit 1; \
+	 fi
+	@echo "  refused before emitting, and said so on the serial line"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@echo "PASS"
+
+# Rung 2 must be reachable in the image that flies.
+#
+# ADR 0007 left the middle rung empty rather than hollow, on the grounds that an
+# absent rung is visible in the ladder and a hollow one is visible only in a
+# campaign. M6 fills it, and this is what stops it from quietly emptying again:
+# drop telemetry's reset_fn and the ladder silently returns to two steps wearing
+# three labels.
+#
+# Checked from the binary, on the host, and not by flight code. The vehicle
+# cannot grow a subsystem in response, so a runtime check would only be able to
+# degrade a system over a build-configuration mistake — which the first version
+# of this did, taking two unrelated scheduler tests with it.
+test-rung2-reachable: $(TARGET)
+	@echo "ladder: rung 2 must be reachable in the flight table"
+	@$(GDB) $(TARGET) -batch -nx -x harness/runner/rung2_check.gdb \
+	   > $(BUILD)/rung2.txt 2>&1
+	@sed -n 's/^  /    /p' $(BUILD)/rung2.txt
+	@grep -qE 'RUNG2-REACHABLE [1-9]' $(BUILD)/rung2.txt \
+	  || { echo "FAIL: no task declares a reset_fn, so rung 2 is unreachable and"; \
+	       echo "      the ladder is two steps wearing three labels"; \
+	       cat $(BUILD)/rung2.txt; exit 1; }
+	@echo "PASS"
+
+test-tlm-all: test-tlm test-tlm-sensors test-rung2-reachable test-tlm-blind-broken \
+              test-tlm-paranoid-broken test-tlm-layout-broken

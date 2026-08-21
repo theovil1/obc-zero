@@ -75,6 +75,17 @@ typedef struct {
      * docs/adr/0005-safe-mode.md.
      */
     uint32_t essential;
+    /*
+     * The task's subsystem reset, or NULL if it owns no state of its own.
+     *
+     * Rung 2 of ADR 0007's ladder needs to know what to reinitialise, and the
+     * escalation code is the wrong place to know it: a switch on task index
+     * inside recover.c would be a second table, kept in step with this one by
+     * hand. Declaring it here means a task that owns state says so, and a task
+     * that does not is skipped past rung 2 rather than given a rung that
+     * silently does nothing.
+     */
+    obc_task_fn reset_fn;
 } obc_task_t;
 
 /*

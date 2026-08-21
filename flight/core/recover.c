@@ -190,16 +190,33 @@ void obc_recover_escalate(uint32_t rung, uint32_t task_index, uint32_t frame)
         return;
     }
 
-    if (rung != OBC_RUNG_RESET_MACHINE) {
-        return; /* rung 2 is empty; nothing selects it */
+    if (rung == OBC_RUNG_RESET_SUBSYSTEM) {
+        /*
+         * Filled at M6 by ADR 0008. The action is the task's own, declared in
+         * the table rather than decided here, so that a task which owns no
+         * state cannot reach this rung at all.
+         *
+         * Logged like a suspension, and against the current frame rather than a
+         * future one: a subsystem reset happens now. The log entry is what lets
+         * a campaign tell "rung 2 ran" from "rung 2 was selected", and the
+         * frame's sequence returning to zero is what lets the host see it
+         * without a debugger.
+         */
+        obc_task_fn reset_fn = obc_task_table[task_index].reset_fn;
+
+        if (reset_fn == 0) {
+            return; /* nothing to reset; the caller should not have selected it */
+        }
+        log_suspension(task_index, frame, rung);
+        OBC_IGNORE(obc_uart_puts("recover: rung 2, subsystem reset\r\n"));
+        reset_fn();
+        return;
     }
 
-    /*
-     * The count is incremented here, on the way out, and not on the next boot.
-     * A boot that dies before reaching any counting code would never be
-     * counted, and a system dying earlier each time is precisely the loop this
-     * protects against.
-     */
+    if (rung != OBC_RUNG_RESET_MACHINE) {
+        return;
+    }
+
     /*
      * The count is not touched here. The in-progress flag raised at boot is
      * still raised, so the next boot counts this one — which is what makes a

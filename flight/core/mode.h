@@ -31,6 +31,7 @@
 #define OBC_SAFE_FRAME_OVERRUN 2u /* the executive missed a frame boundary */
 #define OBC_SAFE_CLOCK 3u         /* mtime would not settle */
 #define OBC_SAFE_RESET_LOOP 4u    /* the ladder ran out of rungs */
+#define OBC_SAFE_TELEMETRY 5u     /* the frame layout failed its own audit */
 
 /*
  * Observable 1 of 3: a word in RAM. Answers "what is the system doing now"

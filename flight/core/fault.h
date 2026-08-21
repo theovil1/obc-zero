@@ -89,6 +89,17 @@ typedef struct {
 extern obc_fault_record_t obc_fault_record;
 
 /*
+ * The previous boot's reset cause, latched before the record is consumed.
+ *
+ * obc_fault_consume() destroys the record, so the cause is readable exactly
+ * once, early in main(). It was already computed there and then dropped;
+ * telemetry needs it every frame, and re-reading a consumed record would return
+ * OBC_RESET_UNKNOWN for the rest of the mission — a frame confidently reporting
+ * that nothing happened.
+ */
+extern volatile uint32_t obc_reset_cause_previous;
+
+/*
  * mcause carries the interrupt flag in bit 31. Exception cause 3 (breakpoint)
  * and interrupt cause 3 (machine software interrupt) are unrelated events that
  * share a code, so the field is kept 32 bits wide everywhere and these two

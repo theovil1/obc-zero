@@ -1,5 +1,5 @@
 /*
- * SiFive UART, transmit only.
+ * SiFive UART, transmit only. Two ports: a text console and a binary downlink.
  *
  * Copyright 2026 Théo Vilain
  * SPDX-License-Identifier: Apache-2.0
@@ -11,7 +11,7 @@
 
 #include "core/status.h"
 
-/* Enables the transmitter. Must be called before any write. */
+/* Enables both transmitters. Must be called before any write. */
 void obc_uart_init(void);
 
 /* Writes one byte. Returns OBC_ERR_TIMEOUT if the transmit FIFO stayed full
@@ -27,5 +27,21 @@ OBC_MUST_CHECK obc_status_t obc_uart_put_u32(uint32_t v);
 
 /* Writes v as eight uppercase hex digits, prefixed with "0x". */
 OBC_MUST_CHECK obc_status_t obc_uart_put_hex32(uint32_t v);
+
+/*
+ * Writes raw bytes to the downlink port, which carries telemetry and nothing
+ * else.
+ *
+ * Bytes rather than a string: a frame contains NUL and every other value, so a
+ * NUL-terminated write would truncate it. Separate from the console for the
+ * reason given in uart.c — the console is a development artefact and the
+ * downlink is the system's product, and a single line would need a
+ * de-interleaver that would end up in flight code.
+ *
+ * Stops at the first refusal and returns it. The caller is not allowed to assume
+ * the whole frame went out.
+ */
+OBC_MUST_CHECK obc_status_t obc_uart_downlink_write(const volatile uint8_t *bytes,
+                                                    uint32_t len);
 
 #endif /* OBC_HAL_UART_H */

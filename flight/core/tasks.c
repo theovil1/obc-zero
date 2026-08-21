@@ -21,6 +21,8 @@
 #include "core/recover.h"
 #include "core/sched.h"
 #include "core/status.h"
+#include "tlm/frame.h"
+#include "tlm/sensor.h"
 
 /*
  * Periods in frames, and budgets in retired instructions. Named so the static
@@ -38,18 +40,41 @@
 #define T3_PERIOD 8u
 
 /*
- * Essentiality. Only housekeeping survives a degraded mode, because its
- * continued dispatch is the only evidence the executive is still running. M6
- * and M7 will re-examine this set once telemetry has a frame and commands have
- * an ingest path; that re-examination is a change to ADR 0005, not a surprise.
+ * Essentiality. Re-examined at M6, as ADR 0005 said it would be, and the answer
+ * changed: telemetry is now essential.
+ *
+ * A degraded system that stops describing itself is a system nobody can
+ * diagnose, and safe mode is exactly the state in which somebody most needs to
+ * know what happened. Suspending telemetry to save work in a degraded system
+ * saves very little and costs the only channel through which the degradation is
+ * visible. Recorded in ADR 0008 decision 2.
  */
 #define T0_ESSENTIAL 1u
-#define T1_ESSENTIAL 0u
+#define T1_ESSENTIAL 1u
 #define T2_ESSENTIAL 0u
 #define T3_ESSENTIAL 0u
 
+/*
+ * Budgets, in retired instructions.
+ *
+ * T1 is set from the measured worst dispatch — 1633 instructions to sample two
+ * sensors and write 45 bytes — with margin, rather than from an estimate.
+ *
+ * **And it holds only because the emulated UART never stalls.** obc_uart_putc
+ * retries a full FIFO up to UART_TX_RETRY_LIMIT times, so a single stalled byte
+ * costs more instructions than this whole budget and the executive would call it
+ * an overrun. Both halves are correct on their own: the UART bounds its wait,
+ * the executive enforces its budget. Together they turn a congested downlink
+ * into an escalation, and at rung 3 into a reset.
+ *
+ * Not resolved here, and not claimed to be. QEMU's chardev accepts every byte
+ * immediately, so no campaign on this machine can exercise the path — which
+ * means raising the budget to cover it would be tuning against a case nothing
+ * can test. Recorded in ADR 0008 and in the backlog; the fix is a non-blocking
+ * transmit path, which is a HAL change and not a telemetry one.
+ */
 #define T0_BUDGET 1000u
-#define T1_BUDGET 1500u
+#define T1_BUDGET 3000u
 #define T2_BUDGET 3000u
 #define T3_BUDGET 5000u
 
@@ -71,9 +96,28 @@ static void task_housekeeping(void)
     work(50u);
 }
 
+/*
+ * Telemetry: sample every sensor, then pack and emit one housekeeping frame.
+ *
+ * Both statuses are discarded here, and each discard is a claim that there is
+ * genuinely nowhere for it to go:
+ *
+ * - a rejected reading is already published, in the frame's flag byte and in the
+ *   substitute value that replaced it. Returning it would tell a caller that
+ *   does not exist something the frame already says.
+ * - an emission failure has no channel left to be reported on. The UART *is* the
+ *   reporting channel, which is the same position main()'s banner is in. The
+ *   host sees it as a frame that never arrived or one whose sum does not check.
+ *
+ * The escalation path for a telemetry task that misbehaves is the same as for
+ * every other task: it overruns its budget, and the ladder in dispatch() climbs.
+ * Giving this task its own private route to escalation would be a second policy
+ * beside the one ADR 0007 defined.
+ */
 static void task_telemetry(void)
 {
-    work(100u);
+    OBC_IGNORE(obc_sensor_sample());
+    OBC_IGNORE(obc_tlm_emit());
 }
 
 /*
@@ -97,12 +141,20 @@ static void task_audit(void)
     work(400u);
 }
 
+/*
+ * The table. The last column is the task's subsystem reset — rung 2 of the
+ * escalation ladder — and it is NULL for every task that owns no state of its
+ * own. Those tasks escalate from rung 1 straight to rung 3, because a rung that
+ * calls nothing is worse than a rung that is absent.
+ */
 const obc_task_t obc_task_table[] = {
-    { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET, T0_ESSENTIAL },
-    { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET, T1_ESSENTIAL },
-    { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET, T2_ESSENTIAL },
-    { "audit",        task_audit,        T3_PERIOD, T3_BUDGET, T3_ESSENTIAL },
+    { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET, T0_ESSENTIAL, 0 },
+    { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET, T1_ESSENTIAL,
+      obc_tlm_subsystem_reset },
+    { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET, T2_ESSENTIAL, 0 },
+    { "audit",        task_audit,        T3_PERIOD, T3_BUDGET, T3_ESSENTIAL, 0 },
 };
+
 
 const uint32_t obc_task_count =
     (uint32_t)(sizeof(obc_task_table) / sizeof(obc_task_table[0]));
