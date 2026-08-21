@@ -343,6 +343,50 @@ def write_report(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def commit_report(path: Path, seed: int, runs: int, failures: int) -> str:
+    """Commit the report as part of the campaign, not as a step afterwards.
+
+    Naming the file by commit closed the window where two runs on one day
+    collide. It did not close the window where two runs happen before anybody
+    thinks to commit the first — it only moved it. A campaign whose report is
+    not committed is not finished, so finishing it is the campaign's job.
+
+    Returns a line describing what happened, for the operator to read.
+    """
+    verdict = "0 failures" if failures == 0 else f"{failures} failures"
+    message = (
+        f"docs: campaign report, {runs} runs at seed {seed}, {verdict}\n"
+        "\n"
+        "Committed by the campaign itself. A report left uncommitted is evidence\n"
+        "that the next run can destroy, and evidence is the one loss more work\n"
+        "does not repair."
+    )
+    add = subprocess.run(
+        ["git", "add", "--", str(path)], capture_output=True, text=True, check=False
+    )
+    if add.returncode != 0:
+        return f"  could not stage {path}: {add.stderr.strip()}"
+
+    done = subprocess.run(
+        ["git", "commit", "-q", "-m", message, "--", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        return (
+            f"  REPORT NOT COMMITTED: {done.stdout.strip() or done.stderr.strip()}\n"
+            "  The campaign ran. Its result is not yet safe from the next run."
+        )
+    head = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    return f"  report committed as {head}"
+
+
 def main(argv: list[str]) -> int:
     """Run the campaign. Returns a process exit status."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -352,6 +396,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--build", type=Path, default=Path("build"))
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument("--timeout", type=float, default=40.0)
+    parser.add_argument(
+        "--no-commit",
+        dest="commit",
+        action="store_false",
+        help=(
+            "leave the report uncommitted. The default commits it, because a "
+            "campaign whose report is not committed has only moved the window "
+            "in which the next run destroys it."
+        ),
+    )
     parser.add_argument(
         "--status",
         type=Path,
@@ -375,6 +429,23 @@ def main(argv: list[str]) -> int:
         text=True,
         check=False,
     ).stdout.strip()
+
+    # A campaign report names the commit it measured, so it must name one that
+    # can be checked out. Same refusal as `make measure`, and for the same
+    # reason: a figure taken on uncommitted work names a state nobody else can
+    # reach.
+    #
+    # An explicit --report is a scratch path for a trial run and is exempt,
+    # which is also what keeps trial runs out of docs/reports.
+    if args.report is None and commit.endswith("-dirty"):
+        print(
+            "  REFUSED: the working tree is dirty.\n"
+            "  A campaign report names the commit it measured, and a -dirty "
+            "hash names\n  a state nobody can check out. Commit first, or pass "
+            "--report for a trial.",
+            file=sys.stderr,
+        )
+        return 2
 
     # Resolved and checked before a single run, not after fourteen minutes of
     # them. A refusal that arrives at the end has already wasted the campaign it
@@ -439,6 +510,8 @@ def main(argv: list[str]) -> int:
     write_report(report, tally, args.runs, args.seed, elapsed, commit)
 
     print(f"\n  report written to {report}")
+    if args.commit:
+        print(commit_report(report, args.seed, args.runs, len(tally.failures)))
     print(f"  reproduce with: --runs {args.runs} --seed {args.seed}")
     return 1 if tally.failures else 0
 
