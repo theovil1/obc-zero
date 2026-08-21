@@ -5,6 +5,136 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — The thesis, demonstrated on my own code
+
+**Measured commit:** `1d767f97600c91d834a7b47b8323485e2e75ba32`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### Why the mscratch defect is the result worth keeping
+
+The `README` claims that a flight computer is credible only through evidence,
+and that surviving one's own faults is the product rather than a feature. That
+is easy to write and easy to leave as a slogan. This milestone produced a
+concrete instance of it, in this repository's own code.
+
+The defect: the trap handler used the standard `csrrw t0, mscratch, t0` idiom,
+which leaves `mscratch` holding the interrupted `t0` and assumes the handler
+swaps it back before `mret`. This handler resets instead of returning, so it
+never swapped back. A **nested** trap therefore swapped garbage into `t0` and
+wrote its marker to an arbitrary address.
+
+What matters is not the bug. It is where the bug lived:
+
+- Every nominal boot passed. The banner was correct, the timer was correct.
+- The single-fault test passed, twice over, including with a corrupted `sp`.
+- The defect existed **only** on the path taken when the handler itself fails —
+  that is, only after everything else has already gone wrong.
+
+No quantity of nominal testing reaches that path. No amount of code review found
+it either; the idiom is correct in every textbook, and wrong here for a reason
+that depends on a property of *this* handler. It was found because a test
+existed whose entire job was to make the system fail while it was already
+failing.
+
+That is the project's argument, and it is now backed by an instance rather than
+an assertion: **the interesting failures live in the recovery paths, and the
+recovery paths are exactly the ones ordinary testing never executes.** Worth a
+write-up later, with the diff.
+
+### Timebase asserted by ratio, not by the host clock
+
+The M1 criterion asked for an assertion against a host-timed interval. Under
+`-icount` that measures the wrong thing: guest time advances with instructions
+executed, so a host-timed figure reports emulation speed and host load, and
+moves with the machine that ran it.
+
+The deterministic anchor is the ratio between the two clocks already present. A
+continuously executing core retires exactly `(10^9 / 2^shift) / 32768`
+instructions per tick — 476.837 at `shift=6`. Measured 476822 in a probe and
+476162 to 476786 in the boot check, inside a 1 % tolerance.
+
+Shown to fail before being trusted:
+
+| Shift | Reported | Verdict |
+|---|---:|---|
+| 6 | 476786 | ok |
+| 3 | 3807794 | FAULT, out of tolerance |
+| 0 | 30473666 | FAULT, out of tolerance |
+
+It does **not** establish 32768 Hz in real-time terms, and cannot: under
+`-icount` there is no real time inside the guest to compare against. The
+absolute figure still rests on the host-timed measurement taken without
+`-icount`, recorded in ADR 0001. Stated in the code so that nobody later reads
+this check as proving more than it does.
+
+A constraint found on the way: 64-bit division pulls `__udivdi3` out of libgcc,
+which a freestanding link does not provide. The arithmetic is 32-bit throughout.
+The build fails loudly rather than silently, but it is worth knowing before
+writing the expression rather than after.
+
+### The harness moved while it was still small
+
+`harness/faults/` now holds the four injectors and `harness/broken/` the
+deliberately naive timer. Seven files today; the same move at M9 would be thirty
+and would happen at the worst possible moment, if at all.
+
+The run lifecycle and the assertions are still in the Makefile, and the
+criterion naming `harness` stays **unticked** on purpose. The harness is being
+built incrementally across milestones — M9 consolidates it, it does not begin
+there — and the tick should reflect the structure rather than only the
+behaviour.
+
+### What the persistent cause does not give M5
+
+Checked against `flight/core/fault.c` rather than assumed. The cleared re-entry
+flag answers "am I inside the handler on this boot"; M5's reset-loop protection
+needs "did previous boots die inside the handler", and the persistent
+double-fault cause is **not** sufficient for it:
+
+- there is no count, so a boot cannot tell the first double fault from the
+  hundredth — which is the entire distinction loop protection is made of;
+- `obc_fault_consume()` clears the record after reporting, so even the single
+  bit does not survive into the boot after next;
+- there is no window, and "N in a row" and "N within T ticks" are different
+  policies needing a persisted timestamp nothing currently writes.
+
+Written into the backlog with what M5 will need, because the counter has to
+survive `consume()` — which makes it a change to the record's structure rather
+than an addition beside it, and cheaper to plan now than to retrofit while
+building the escalation ladder.
+
+### Flash is now tracked
+
+The image tripled on this milestone, 874 to 2698 bytes. On 4 MiB that is
+nothing, and no optimisation is called for. But `BUDGET.md` tracked only RAM,
+while rule 3 of that same file actively pushes constant data into flash, and
+M6 through M8 each add tables and fixed-layout frames.
+
+A flash row now exists with an alert threshold of 262144 bytes, one sixteenth of
+the region, **declared arbitrary in the file itself**. It is not derived from
+anything; it exists so that crossing it forces a conversation instead of passing
+unnoticed.
+
+### Measurement
+
+`make measure` on `1d767f9`:
+
+```
+   text    data     bss     dec     hex filename
+   2698       0    1064    3762     eb2 build/obc.elf
+```
+
+Flash 2698 B of 4 MiB. RAM 1064 B of 16384 B, of which 36 B is the fault record
+in `.noinit`. Seven test targets green: `test`, `test-poisoned`, `test-carry`,
+`test-carry-broken`, `test-stability`, `test-trap`, `test-record`.
+
+### Still open in M1
+
+The reset cause produced by the AON watchdog path in normal operation, as
+opposed to the trap path. And the harness criterion above.
+
+---
+
 ## 2026-08-20 — M1: the trap handler, and the defect its own test found
 
 **Measured commit:** `9e807dfdec5c739d94a2dc2d1b6de1bec5766b32`
