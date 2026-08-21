@@ -62,6 +62,9 @@ SECTIONS
          * satisfy the linker would misrepresent both.
          */
         KEEP(*(.text.obc_fault_reset_with_cause))
+        /* The idle park. Reached by the watchdog test rather than by any call,
+         * so --gc-sections would otherwise drop it. */
+        KEEP(*(.text.obc_park_forever))
         *(.text .text.*)
         . = ALIGN(4);
     } > FLASH

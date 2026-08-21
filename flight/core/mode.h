@@ -30,6 +30,7 @@
 #define OBC_SAFE_TRAP 1u          /* a fault, restored from the record at boot */
 #define OBC_SAFE_FRAME_OVERRUN 2u /* the executive missed a frame boundary */
 #define OBC_SAFE_CLOCK 3u         /* mtime would not settle */
+#define OBC_SAFE_RESET_LOOP 4u    /* the ladder ran out of rungs */
 
 /*
  * Observable 1 of 3: a word in RAM. Answers "what is the system doing now"

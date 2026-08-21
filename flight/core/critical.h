@@ -92,6 +92,23 @@ extern const obc_critical_item_t obc_critical_mode;
 extern volatile uint32_t obc_critical_repairs;
 extern volatile uint32_t obc_critical_failed_votes;
 
+/*
+ * Transitions into an unresolvable state: incremented only when a vote that was
+ * resolving stops resolving.
+ *
+ * **Events, not passages.** That distinction is the whole reason this counter
+ * exists rather than the escalation ladder reading `failed_votes`, which counts
+ * 66 per corruption in a sixteen-frame window and millions over a soak. A
+ * ladder that escalates on the number of times it *noticed* a problem escalates
+ * on how often it looked.
+ *
+ * One irreparable corruption is one event here, however many times it is
+ * subsequently observed. It goes back to counting only after a vote resolves
+ * again — which, since the voter repairs what it can, means the state genuinely
+ * recovered.
+ */
+extern volatile uint32_t obc_critical_unresolvable_events;
+
 /* Writes all three copies of one item, and their checksums. */
 void obc_critical_set(const obc_critical_item_t *item, uint32_t value);
 

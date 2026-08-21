@@ -13,6 +13,7 @@
 
 #include "core/fault.h"
 #include "core/mode.h"
+#include "core/recover.h"
 #include "core/sched.h"
 #include "core/status.h"
 #include "hal/mtime.h"
@@ -103,6 +104,7 @@ extern uint32_t __stack_top[];
 #define STACK_PAINT 0xDEADBEEFu
 
 void obc_main(void);
+void obc_park_forever(void);
 
 static inline uint32_t read_minstret(void)
 {
@@ -581,8 +583,16 @@ void obc_main(void)
     obc_status_t st;
     obc_status_t tick_st;
     obc_status_t inv_st;
+    uint32_t boot_rung;
 
     obc_uart_init();
+
+    /*
+     * As early as a boot can do this. Everything before it is a window in which
+     * a death goes uncounted, so the window is kept to the startup code and the
+     * UART bring-up that makes the count reportable.
+     */
+    boot_rung = obc_recover_boot_begins();
 
     /*
      * The banner is the only observable this milestone has. If a write fails
@@ -636,6 +646,30 @@ void obc_main(void)
     }
     obc_fault_consume();
 
+    /*
+     * Report the surviving short-boot streak before anything can clear it, and
+     * before the executive runs. A count that is only visible after a healthy
+     * boot has cleared it is a count nobody can read.
+     */
+    if (st == OBC_OK) {
+        st = obc_uart_puts("boots  : ");
+    }
+    if (st == OBC_OK) {
+        st = obc_uart_put_u32(obc_recover_short_boots());
+    }
+    if (st == OBC_OK) {
+        st = obc_uart_puts(" consecutive short\r\n");
+    }
+
+    /*
+     * The streak has reached its limit: escalating now enters safe mode rather
+     * than resetting a sixth time. Done before the executive runs, because a
+     * system that cannot stay up should not be given more work to fail at.
+     */
+    if (boot_rung == OBC_RUNG_RESET_MACHINE) {
+        obc_recover_escalate(OBC_RUNG_RESET_MACHINE, 0u, 0u);
+    }
+
     tick_st = print_tick_check();
     if (tick_st == OBC_OK) {
         tick_st = print_timebase_check();
@@ -650,6 +684,15 @@ void obc_main(void)
         obc_status_t sch = obc_sched_run(OBC_SCHED_WINDOW_FRAMES);
         st = print_sched_summary(sch);
     }
+
+    /*
+     * Declared healthy only on evidence that the executive turns, which is
+     * frames completed rather than initialisation finished. A boot that
+     * initialises perfectly and dies on its first frame must not clear the
+     * streak, or the loop protection never fires on the one failure it exists
+     * for.
+     */
+    OBC_IGNORE_INT(obc_recover_boot_is_healthy(obc_frames_run));
 
     /*
      * Sentinel. This exact string is what the host watches for to decide that
@@ -672,6 +715,19 @@ void obc_main(void)
      * core is the honest end state, and `wfi` keeps the host CPU quiet during
      * long harness runs.
      */
+    obc_park_forever();
+}
+
+/*
+ * The idle park. Named and non-static so the watchdog test can reach it: the
+ * test needs a genuine infinite loop inside real flight code, and inventing one
+ * for the test would prove the watchdog against something that does not ship.
+ *
+ * M1 recorded this loop as the one assumed exception to "every loop has a
+ * provable bound". It stays the only one.
+ */
+void obc_park_forever(void)
+{
     for (;;) {
         __asm__ volatile("wfi");
     }

@@ -36,6 +36,18 @@ const uint32_t obc_critical_item_count =
 
 volatile uint32_t obc_critical_repairs;
 volatile uint32_t obc_critical_failed_votes;
+volatile uint32_t obc_critical_unresolvable_events;
+
+/*
+ * Whether each item's last vote resolved. Per item, not global: two items in
+ * different states must not mask each other, and a global flag would count one
+ * event for the pair.
+ *
+ * Sized by a compile-time maximum rather than by the registry, because it is
+ * indexed inside the vote and must not depend on anything mutable.
+ */
+#define OBC_CRITICAL_MAX_ITEMS 4u
+static uint8_t s_was_resolving[OBC_CRITICAL_MAX_ITEMS] = { 1u, 1u, 1u, 1u };
 
 static uint32_t checksum_of(uint32_t value, uint32_t seed)
 {
@@ -82,8 +94,21 @@ void obc_critical_set(const obc_critical_item_t *item, uint32_t value)
  * two and win against the one surviving good copy. Only then do the survivors
  * vote.
  */
+static uint32_t item_index(const obc_critical_item_t *item)
+{
+    uint32_t i;
+
+    for (i = 0u; i < obc_critical_item_count && i < OBC_CRITICAL_MAX_ITEMS; i++) {
+        if (obc_critical_items[i] == item) {
+            return i;
+        }
+    }
+    return 0u;
+}
+
 static obc_status_t vote(const obc_critical_item_t *item, uint32_t *out)
 {
+    uint32_t index = item_index(item);
     uint32_t i;
     uint32_t j;
 
@@ -118,6 +143,9 @@ static obc_status_t vote(const obc_critical_item_t *item, uint32_t *out)
             if (out != NULL) {
                 *out = winner;
             }
+            /* Resolving again. The next failure will be a new event rather
+             * than a continuation of this one. */
+            s_was_resolving[index] = 1u;
             return OBC_OK;
         }
     }
@@ -128,6 +156,12 @@ static obc_status_t vote(const obc_critical_item_t *item, uint32_t *out)
      * be returning a value the system cannot vouch for. Say so instead.
      */
     obc_critical_failed_votes++;
+    if (s_was_resolving[index] != 0u) {
+        /* The transition, counted once. Every subsequent failure of the same
+         * unrepaired corruption is the same event still happening. */
+        s_was_resolving[index] = 0u;
+        obc_critical_unresolvable_events++;
+    }
     return OBC_ERR_UNSTABLE;
 }
 

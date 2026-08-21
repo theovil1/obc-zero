@@ -36,6 +36,14 @@
  * places where the system knowingly stops caring, which is a number worth being
  * able to read.
  */
+/* As OBC_IGNORE, for a function returning int rather than a status. Separate so
+ * that the count of discarded *statuses* stays exactly that. */
+#define OBC_IGNORE_INT(expr)         \
+    do {                             \
+        int obc_ignored_int_ = (expr); \
+        (void)obc_ignored_int_;      \
+    } while (0)
+
 #define OBC_IGNORE(expr)                 \
     do {                                 \
         obc_status_t obc_ignored_ = (expr); \

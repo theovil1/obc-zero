@@ -52,6 +52,36 @@ So rung 1 is defined by its observables rather than by its effect:
 If those three are absent, rung 1 is a comment. The M5 test asserts the gap
 appears in the trace at the expected frame, not merely that a counter moved.
 
+### Rung 1 costs a different amount depending on the task
+
+A suspension withholds the task's **next due frame**, not the next frame — the
+first version used the next frame, which withholds nothing when the task is not
+due then, and the announcement had no gap behind it.
+
+The consequence has to be stated because it makes the ladder non-uniform:
+
+| Task period | What rung 1 costs | Time before it could run again |
+|---|---|---|
+| 1 frame | one dispatch | 31 ms |
+| 8 frames | one dispatch | 250 ms |
+
+**The same rung is a light touch on a fast task and a quarter-second outage on a
+slow one.** Worse for the escalation logic: a slow task that faults on its next
+dispatch escalates to rung 3 having been withheld once but not having been
+*retried* in any meaningful sense, because eight frames of the mission passed in
+between.
+
+Not corrected here, and the reasoning is that the alternatives are worse at this
+stage. Scaling the suspension by period would make rung 1's cost uniform in time
+and non-uniform in dispatches, which is the same problem rotated. Escalating on
+elapsed time rather than on the next fault needs a policy nothing yet justifies.
+
+**What is required is that the asymmetry is not forgotten**, because an
+escalation argument that assumes rung 1 means the same thing everywhere is wrong
+for half the table. Revisit when M6 gives the table tasks whose periods differ
+by more than the current 8:1, or when a mission profile makes a quarter-second
+outage meaningful.
+
 ## Decision 2: the window is counted in boots, not in time
 
 Reset-loop protection needs "N resets within a window". The obvious window is

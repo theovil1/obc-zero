@@ -55,6 +55,23 @@ while $i < obc_trace_len
   set $i = $i + 1
 end
 
+# Suspensions, announced by the flight software with the task index and the
+# frame it was suspended in.
+#
+# Read from the guest, never derived from what the host injected. An exemption
+# computed host-side would be the host checking its own opinion — the same
+# mistake refused when the task table was taken from the binary instead of
+# restated here.
+printf "suspension_count %u\n", obc_suspension_count
+printf "suspension_overflow %u\n", obc_suspension_overflow
+
+set $i = 0
+while $i < obc_suspension_count
+  printf "suspension %u %u %u\n", $i, \
+    obc_suspensions[$i].task, obc_suspensions[$i].frame
+  set $i = $i + 1
+end
+
 printf "DUMP-COMPLETE\n"
 
 detach

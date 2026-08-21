@@ -1,15 +1,18 @@
 /*
- * The task table.
+ * DELIBERATELY BROKEN. Not flight code. Never linked into a flight image.
  *
- * Compile-time constant, in flash, and checked at compile time. A table that
- * cannot meet its own frame is a build failure rather than a campaign result:
- * discovering it in a campaign would mean the campaign was measuring the wrong
- * thing all along.
+ * A copy of flight/core/tasks.c whose *period-1* task overruns on every
+ * dispatch, so the ladder climbs all the way and the system resets on every
+ * boot. That is what a reset loop looks like from the inside.
  *
- * The tasks themselves do deterministic bounded work and nothing else. M2 is
- * about the executive, not about what runs on it; telemetry arrives at M6 and
- * the scrubber at M4, and giving them stubs here would invite reading this
- * table as a design for them.
+ * The period matters. harness/broken/tasks_overrun.c starves a period-8 task,
+ * which reaches rung 1 and stops there: suspended at its next due frame, it
+ * never gets a second dispatch inside the window and never reaches rung 3. Once
+ * rung 1 actually withheld a dispatch, that variant stopped looping — which is
+ * the suspension working, not the ladder failing.
+ *
+ * A period-1 task overruns in frame 0, is withheld in frame 1, and overruns
+ * again in frame 2. Two faults, rung 3, reset, and the next boot repeats it.
  *
  * Copyright 2026 Théo Vilain
  * SPDX-License-Identifier: Apache-2.0
@@ -48,7 +51,7 @@
 #define T2_ESSENTIAL 0u
 #define T3_ESSENTIAL 0u
 
-#define T0_BUDGET 1000u
+#define T0_BUDGET 100u /* THE DEFECT: far below the ~258 this task uses */
 #define T1_BUDGET 1500u
 #define T2_BUDGET 3000u
 #define T3_BUDGET 5000u

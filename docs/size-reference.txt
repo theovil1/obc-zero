@@ -1,13 +1,13 @@
 # gcc      14.2.0
 # binutils 2.45.50.20251209
-# ignores  14
-# accepted 2026-08-21 scrubber walks a registry, and its status is discarded at the call site
-.bss          408
+# ignores  15
+# accepted 2026-08-21 M5 adds the escalation ladder, the boot record and the transition counter
+.bss          484
 .critical0      8
 .critical1      8
 .critical2      8
-.data           4
-.init         158
-.rodata      1368
+.data          16
+.init         154
+.rodata      1476
 .stack       1024
-.text        3568
+.text        4336

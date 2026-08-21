@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "core/mode.h"
+#include "core/recover.h"
 #include "core/status.h"
 #include "hal/mtime.h"
 
@@ -31,6 +32,26 @@ static inline uint32_t read_minstret(void)
     uint32_t v;
     __asm__ volatile("csrr %0, minstret" : "=r"(v));
     return v;
+}
+
+/* How many due tasks this frame were suspended rather than skipped by error. */
+static uint32_t obc_suspended_this_frame(uint32_t frame)
+{
+    uint32_t n = 0u;
+    uint32_t i;
+
+    for (i = 0u; i < obc_task_count; i++) {
+        if (obc_task_table[i].period_frames == 0u) {
+            continue;
+        }
+        if ((frame % obc_task_table[i].period_frames) != 0u) {
+            continue;
+        }
+        if (obc_recover_is_suspended(i, frame)) {
+            n++;
+        }
+    }
+    return n;
 }
 
 static void trace_push(uint32_t task_index)
@@ -60,7 +81,7 @@ static void trace_push(uint32_t task_index)
  * yield — which works against the M1 rule that a handler must not touch the
  * stack.
  */
-static void dispatch(uint32_t index)
+static void dispatch(uint32_t index, uint32_t frame)
 {
     const obc_task_t *task = &obc_task_table[index];
     obc_task_state_t *state = &obc_task_state[index];
@@ -85,6 +106,15 @@ static void dispatch(uint32_t index)
     }
     if (used > task->budget_instr) {
         state->overruns++;
+        /*
+         * Climb. First overrun suspends the task for the next frame; a second
+         * one means suspending did not help, so the ladder goes to its top
+         * rung. Rung 2 is skipped because it is empty, which is visible here
+         * rather than hidden behind a helper that pretends to try it.
+         */
+        obc_recover_escalate(state->overruns == 1u ? OBC_RUNG_SUSPEND_TASK
+                                                   : OBC_RUNG_RESET_MACHINE,
+                             index, frame);
     }
 }
 
@@ -109,7 +139,7 @@ static obc_status_t sched_now(uint64_t *out, uint32_t frame)
     return st;
 }
 
-obc_status_t obc_sched_run(uint32_t frames)
+static obc_status_t run_window(uint32_t frames)
 {
     uint64_t frame_start;
     uint32_t frame;
@@ -126,6 +156,15 @@ obc_status_t obc_sched_run(uint32_t frames)
 
     obc_slack_ticks_min = OBC_FRAME_TICKS;
     obc_window_start_ticks = (uint32_t)frame_start;
+
+    /*
+     * The backstop is armed by the caller and fed from the loop below.
+     *
+     * Not a task, and that is the whole point. A watchdog dispatched from the
+     * table is fed by the executive it watches, so an executive failure takes
+     * the watchdog with it — a mechanism that works only where everything else
+     * already does. The AON domain does not care whether software is running.
+     */
     if (obc_mode_is_safe() && obc_safe_entry_frame == OBC_SAFE_ENTRY_NONE) {
         /* Already degraded on entry, restored from the previous boot. Frame 0
          * so the host holds the whole window to the essential subset. */
@@ -137,12 +176,16 @@ obc_status_t obc_sched_run(uint32_t frames)
         uint64_t now;
         uint32_t i;
         uint32_t guard;
+        uint32_t due;
+        uint32_t ran;
 
         /*
          * Dispatch every task due this frame, in table order. Order is a
          * property the assertions check position by position, so it is fixed by
          * the table and never by arrival time or by any dynamic priority.
          */
+        due = 0u;
+        ran = 0u;
         for (i = 0u; i < obc_task_count; i++) {
             if (obc_task_table[i].period_frames == 0u) {
                 continue;
@@ -153,9 +196,29 @@ obc_status_t obc_sched_run(uint32_t frames)
             if (obc_mode_is_safe() && obc_task_table[i].essential == 0u) {
                 continue;
             }
-            if ((frame % obc_task_table[i].period_frames) == 0u) {
-                dispatch(i);
+            if ((frame % obc_task_table[i].period_frames) != 0u) {
+                continue;
             }
+            due++;
+            /* Rung 1: suspended for this frame, deliberately not dispatched.
+             * The suspension log is what stops the host reading the resulting
+             * gap as a dropped dispatch. */
+            if (obc_recover_is_suspended(i, frame)) {
+                continue;
+            }
+            dispatch(i, frame);
+            ran++;
+        }
+
+        /*
+         * Fed only when every task that was due and not suspended actually ran.
+         * Never from the idle path: a system whose tasks have all died would
+         * otherwise sit in idle looking healthy to the watchdog forever, and
+         * the feed has to be earned by work rather than by the core being
+         * alive.
+         */
+        if (ran + obc_suspended_this_frame(frame) == due) {
+            obc_recover_feed_hardware();
         }
 
         /* Slack: ticks left between the last dispatch and the frame end. A
@@ -215,4 +278,22 @@ obc_status_t obc_sched_run(uint32_t frames)
 
     obc_window_end_ticks = (uint32_t)frame_start;
     return OBC_OK;
+}
+
+/*
+ * Arms the backstop, runs the window, disarms.
+ *
+ * The pairing is structural rather than repeated at each return. The first
+ * version disarmed at the successful exit only, and every error path left the
+ * watchdog armed with nothing feeding it — so a run that failed for one reason
+ * reset for another, which is a harness that renames the fault.
+ */
+obc_status_t obc_sched_run(uint32_t frames)
+{
+    obc_status_t st;
+
+    obc_recover_arm_hardware();
+    st = run_window(frames);
+    obc_recover_disarm_hardware();
+    return st;
 }

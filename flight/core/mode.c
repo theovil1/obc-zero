@@ -62,6 +62,9 @@ static const char *reason_text(uint32_t reason)
     if (reason == OBC_SAFE_CLOCK) {
         return "clock would not settle";
     }
+    if (reason == OBC_SAFE_RESET_LOOP) {
+        return "reset loop, the ladder ran out of rungs";
+    }
     return "unspecified";
 }
 

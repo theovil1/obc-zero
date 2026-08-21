@@ -81,6 +81,7 @@ TASKS_SRC ?= flight/core/tasks.c
 SRC_C := flight/core/main.c \
          flight/core/critical.c \
          flight/core/mode.c \
+         flight/core/recover.c \
          $(SCHED_SRC) \
          $(TASKS_SRC) \
          flight/core/fault.c \
@@ -121,7 +122,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check lint test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -446,6 +447,66 @@ test-sched-repro: $(TARGET)
 	$(call dump_trace,$(BUILD)/trace-a.txt)
 	$(call dump_trace,$(BUILD)/trace-b.txt)
 	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-a.txt $(BUILD)/trace-b.txt
+
+# --- Escalation ---------------------------------------------------------------
+#
+# The watchdog test breaks the *executive*, not a task. A hung task is caught by
+# the budget check, which runs inside the very executive a hung executive takes
+# with it — so hanging a task proves the watchdog works in the cases where
+# everything else already does.
+test-wdt: $(TARGET)
+	@echo "wdt: a hung executive is reset by the hardware backstop"
+	@rm -f $(BUILD)/serial.log $(BUILD)/hang.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 timeout 60 $(GDB) $(TARGET) -batch -x harness/faults/hang.gdb \
+	   > $(BUILD)/hang.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
+	   [ "$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] \
+	     && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'HANG-INJECTED' $(BUILD)/hang.log \
+	   || { echo "FAIL: the executive was not hung, so this proved nothing"; \
+	        tail -4 $(BUILD)/hang.log; exit 1; }; \
+	 n=$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log); \
+	 test "$$n" -ge 2 \
+	   || { echo "FAIL: a hung executive was not reset ($$n banners)"; exit 1; }; \
+	 grep -qF 'boots  : 1 consecutive short' $(BUILD)/serial.log \
+	   || { echo "FAIL: a hardware reset was not counted as a short boot"; \
+	        grep boots $(BUILD)/serial.log; exit 1; }
+	@echo "PASS (reset, and the hardware reset was counted)"
+
+# A fault that recurs every boot must climb to the top rung and stop there.
+# Asserted on the streak reaching its limit AND on safe mode being entered
+# instead of a sixth reset — the second is what stops the ladder cycling.
+test-loop:
+	@echo "loop: a recurring fault reaches safe mode instead of resetting forever"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory TASKS_SRC=harness/broken/tasks_loop.c \
+	    $(TARGET) >/dev/null
+	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) & \
+	 qpid=$$!; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 60 ))); do \
+	   grep -qF 'mode   : SAFE' $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'boots  : 5 consecutive short' $(BUILD)/serial.log \
+	   || { echo "FAIL: the streak never reached its limit"; \
+	        grep boots $(BUILD)/serial.log | tail -3; exit 1; }; \
+	 grep -qF 'mode   : SAFE, reset loop' $(BUILD)/serial.log \
+	   || { echo "FAIL: the ladder kept resetting instead of degrading"; exit 1; }; \
+	 after=$$(sed -n '/mode   : SAFE, reset loop/,$$p' $(BUILD)/serial.log \
+	          | grep -c 'recover: rung 3'); \
+	 test "$$after" -eq 0 \
+	   || { echo "FAIL: it reset $$after more times after reaching safe mode"; exit 1; }
+	@echo "PASS (streak reached the limit, degraded, and stopped resetting)"
+	@$(MAKE) --no-print-directory clean >/dev/null
 
 # --- Voter --------------------------------------------------------------------
 #

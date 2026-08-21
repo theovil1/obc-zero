@@ -35,6 +35,21 @@ class Task:
 
 
 @dataclass(frozen=True)
+class Suspension:
+    """A dispatch the flight software says it withheld, and for which task.
+
+    Announced by the guest, never derived from what the host injected. A
+    host-side exemption would be the host checking its own opinion, which is the
+    mistake refused when the task table was read from the binary rather than
+    restated here.
+    """
+
+    index: int
+    task: int
+    frame: int
+
+
+@dataclass(frozen=True)
 class Dump:
     """A parsed scheduler dump, read from guest RAM after the window closed."""
 
@@ -48,6 +63,8 @@ class Dump:
     mode: int
     safe_reason: int
     safe_entry_frame: int
+    suspension_overflow: int
+    suspensions: tuple[Suspension, ...]
     window_start: int
     window_end: int
     tasks: tuple[Task, ...]
@@ -58,6 +75,7 @@ def parse_dump(text: str) -> Dump:
     """Parse the flat format emitted by ``harness/runner/dump_trace.gdb``."""
     scalars: dict[str, int] = {}
     tasks: list[Task] = []
+    suspensions: list[Suspension] = []
     trace: dict[int, int] = {}
     complete = False
 
@@ -79,6 +97,10 @@ def parse_dump(text: str) -> Dump:
                     overruns=int(parts[7]),
                     max_instr=int(parts[8]),
                 )
+            )
+        elif parts[0] == "suspension" and len(parts) == 4:
+            suspensions.append(
+                Suspension(index=int(parts[1]), task=int(parts[2]), frame=int(parts[3]))
             )
         elif parts[0] == "trace" and len(parts) == 3:
             trace[int(parts[1])] = int(parts[2])
@@ -105,6 +127,7 @@ def parse_dump(text: str) -> Dump:
         "mode",
         "safe_reason",
         "safe_entry_frame",
+        "suspension_overflow",
     } - scalars.keys()
     if missing:
         raise ValueError(f"the dump is missing fields: {sorted(missing)}")
@@ -121,6 +144,8 @@ def parse_dump(text: str) -> Dump:
         mode=scalars["mode"],
         safe_reason=scalars["safe_reason"],
         safe_entry_frame=scalars["safe_entry_frame"],
+        suspension_overflow=scalars["suspension_overflow"],
+        suspensions=tuple(sorted(suspensions, key=lambda s: s.index)),
         window_start=scalars["window_start"],
         window_end=scalars["window_end"],
         tasks=tuple(sorted(tasks, key=lambda t: t.index)),
@@ -145,6 +170,7 @@ def expected_trace(dump: Dump) -> tuple[int, ...]:
     scheduler is most likely to be wrong, and skipping the assertion there would
     leave the interesting case unchecked.
     """
+    withheld = {(s.frame, s.task) for s in dump.suspensions}
     sequence: list[int] = []
     entry = dump.safe_entry_frame
     for frame in range(dump.window_frames):
@@ -154,9 +180,57 @@ def expected_trace(dump: Dump) -> tuple[int, ...]:
                 continue
             if degraded and not task.essential:
                 continue
-            if frame % task.period_frames == 0:
-                sequence.append(task.index)
+            if frame % task.period_frames != 0:
+                continue
+            # A dispatch the guest announced it withheld. Keyed on the exact
+            # (frame, task) pair, so a suspension announced for one frame cannot
+            # excuse a dispatch dropped in another, nor one task's suspension
+            # excuse another task's absence.
+            if (frame, task.index) in withheld:
+                continue
+            sequence.append(task.index)
     return tuple(sequence)
+
+
+def check_suspensions(dump: Dump) -> list[str]:
+    """Both directions, and the second is the one that gets forgotten.
+
+    Writing the exemption while thinking about the false red gives a checker
+    that excuses gaps. It must equally refuse an announcement with no gap behind
+    it, or a dropped dispatch can wear a suspension as a disguise.
+    """
+    failures: list[str] = []
+
+    if dump.suspension_overflow:
+        failures.append(
+            f"the suspension log overflowed by {dump.suspension_overflow}, so "
+            "some withheld dispatches are unannounced and would read as dropped"
+        )
+
+    for suspension in dump.suspensions:
+        task = next((t for t in dump.tasks if t.index == suspension.task), None)
+        if task is None:
+            failures.append(
+                f"suspension {suspension.index} names task {suspension.task}, "
+                "which is not in the table"
+            )
+            continue
+        # An announcement for a frame in which the task was not due has no gap
+        # behind it: nothing was withheld, because nothing was going to run.
+        if suspension.frame >= dump.window_frames:
+            failures.append(
+                f"suspension {suspension.index} names frame "
+                f"{suspension.frame}, outside the {dump.window_frames}-frame "
+                "window"
+            )
+        elif suspension.frame % task.period_frames != 0:
+            failures.append(
+                f"suspension {suspension.index} claims task {task.name!r} was "
+                f"withheld in frame {suspension.frame}, where it was not due — "
+                "an announcement with no gap behind it"
+            )
+
+    return failures
 
 
 def check_conformance(dump: Dump) -> list[str]:
@@ -284,7 +358,7 @@ def main(argv: list[str]) -> int:
         return 2
 
     first = parse_dump(Path(argv[1]).read_text(encoding="utf-8"))
-    failures = check_conformance(first) + check_order(first)
+    failures = check_conformance(first) + check_order(first) + check_suspensions(first)
 
     if len(argv) == 3:
         second = parse_dump(Path(argv[2]).read_text(encoding="utf-8"))
