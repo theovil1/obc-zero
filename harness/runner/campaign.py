@@ -41,6 +41,9 @@ STATE_RE = re.compile(r"repairs=(\d+) failed_votes=(\d+) mode=(\d+)")
 
 COPY_NAMES = ("a", "b", "c")
 
+# Below this, a run is a trial and is not archived. Arbitrary, and declared so.
+MIN_ARCHIVED_RUNS = 100
+
 
 @dataclass(frozen=True)
 class Injection:
@@ -429,6 +432,22 @@ def main(argv: list[str]) -> int:
         text=True,
         check=False,
     ).stdout.strip()
+
+    # A run this small is a trial, and a trial does not belong in the report
+    # archive. Three runs proves the machinery works and proves nothing about
+    # the voter, and once committed the archive rule keeps it forever.
+    #
+    # Found by committing exactly that and having to unwind it before it was
+    # pushed. The threshold is arbitrary and declared so; what is not arbitrary
+    # is that "it is only a trial" must not be a judgement made at the keyboard.
+    if args.report is None and args.runs < MIN_ARCHIVED_RUNS:
+        print(
+            f"  REFUSED: {args.runs} runs is a trial, not a campaign.\n"
+            f"  Fewer than {MIN_ARCHIVED_RUNS} runs will not be written to "
+            "docs/reports.\n  Pass --report for a trial, or raise --runs.",
+            file=sys.stderr,
+        )
+        return 2
 
     # A campaign report names the commit it measured, so it must name one that
     # can be checked out. Same refusal as `make measure`, and for the same
