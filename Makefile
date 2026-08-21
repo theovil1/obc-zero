@@ -144,7 +144,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check lint guard-check test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint guard-check boots-distribution test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -193,8 +193,45 @@ size: $(TARGET)
 # A range rather than a number because two tests legitimately loop: a hardware
 # watchdog reset and a reset-loop escalation do not produce a fixed count. A
 # range is still a declaration — it says what the test expects to survive — and
-# a range that spans everything is the same as no guard, so it is written
-# narrowly and the reason is given at the call site.
+# **a range that cannot fail asserts nothing**, which is the defect the M3
+# instruction threshold had. That one was visible; a wide range is the same
+# defect wearing the shape of an assertion.
+#
+# Both looping tests were measured over 100 runs rather than bounded, and both
+# turned out to be exact: test-wdt boots twice every time, test-loop six times
+# every time. Under -icount the machine is deterministic, so the ranges that
+# looked prudent were asserting nothing at all. Re-derive with
+# `make boots-distribution TARGET_UNDER_TEST=test-loop RUNS=100` — every run
+# prints its observed count for exactly that purpose.
+#
+# **No range in this file spans more than one value.** All fifteen were measured;
+# every one is exact. If one ever needs to widen, it is measured first and the
+# distribution goes in the logbook — a range nobody measured is the M3
+# instruction threshold again, wearing the shape of an assertion.
+
+# The distribution behind a declared range.
+#
+# A range is only honest if somebody measured it. This runs one target N times
+# and reports what it actually did, so the bounds in the call sites above are
+# observations rather than caution.
+RUNS ?= 100
+TARGET_UNDER_TEST ?= test-loop
+
+#
+# The tally lives outside $(BUILD), because several of these targets end with a
+# clean and would delete the record of what they just did.
+boots-distribution:
+	@echo "$(TARGET_UNDER_TEST): boot counts over $(RUNS) runs"
+	@seen=$$(mktemp); \
+	 i=1; while [ $$i -le $(RUNS) ]; do \
+	   $(MAKE) --no-print-directory $(TARGET_UNDER_TEST) 2>&1 \
+	     | sed -n 's/^ *boots: \([0-9][0-9]*\) .*/\1/p' >> $$seen; \
+	   i=$$(( i + 1 )); \
+	 done; \
+	 sort -n $$seen | uniq -c | awk '{printf "    %3d boots  x%d\n", $$2, $$1}'; \
+	 echo "    observations: $$(wc -l < $$seen)"; \
+	 echo "    range observed: $$(sort -n $$seen | head -1)..$$(sort -n $$seen | tail -1)"; \
+	 rm -f $$seen
 define assert_boots
 	@boots=$$(grep -c '=== OBC-Zero ===' $(3) 2>/dev/null || true); \
 	 boots=$${boots:-0}; \
@@ -206,7 +243,8 @@ define assert_boots
 	   grep -nE '=== OBC-Zero ===|recover: rung|reset  :' $(3) 2>/dev/null \
 	     | sed 's/^/    /' | head -12; \
 	   exit 1; \
-	 fi
+	 fi; \
+	 echo "    boots: $$boots (declared $(1)..$(2))"
 endef
 
 # The guard is only a default if it cannot be forgotten.
@@ -349,7 +387,7 @@ test: $(TARGET)
 	 grep -qF "build  : $(BUILD_HASH)" $(BUILD)/serial.log \
 	   || { echo "FAIL: build hash mismatch"; exit 1; }; \
 	 echo "PASS"
-	# a smoke boot resets for no reason at all
+	@# a smoke boot resets for no reason at all
 	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # --- Forced mtime carry -------------------------------------------------------
@@ -384,7 +422,7 @@ define run_carry
 	        cat $(BUILD)/carry.log; exit 1; }; \
 	 grep -qF "$(1)" $(BUILD)/serial.log \
 	   || { echo "FAIL: $(3)"; cat $(BUILD)/carry.log; exit 1; }
-	# a forced carry must not cost a boot
+	@# a forced carry must not cost a boot
 	$(call assert_boots,1,1,$(BUILD)/serial.log)
 endef
 
@@ -477,7 +515,7 @@ define dump_trace
 	 grep -qF 'DUMP-COMPLETE' $(1) \
 	   || { echo "FAIL: the debugger did not finish reading guest memory"; \
 	        tail -5 $(1); exit 1; }
-	# dumping the trace must not have rebooted the run it describes
+	@# dumping the trace must not have rebooted the run it describes
 	$(call assert_boots,1,1,$(BUILD)/serial.log)
 endef
 
@@ -576,8 +614,10 @@ test-wdt: $(TARGET)
 	 grep -qF 'boots  : 1 consecutive short' $(BUILD)/serial.log \
 	   || { echo "FAIL: a hardware reset was not counted as a short boot"; \
 	        grep boots $(BUILD)/serial.log; exit 1; }
-	# the hardware backstop resets a hung executive; not a fixed count, because the reset lands wherever the hang left the frame
-	$(call assert_boots,2,6,$(BUILD)/serial.log)
+	@# the backstop resets a hung executive exactly once: 2 boots in 100 runs
+	@# of 100. Measured, not bounded — `make boots-distribution
+	@# TARGET_UNDER_TEST=test-wdt RUNS=100` re-derives it.
+	$(call assert_boots,2,2,$(BUILD)/serial.log)
 	@echo "PASS (reset, and the hardware reset was counted)"
 
 # A fault that recurs every boot must climb to the top rung and stop there.
@@ -606,8 +646,10 @@ test-loop:
 	          | grep -c 'recover: rung 3'); \
 	 test "$$after" -eq 0 \
 	   || { echo "FAIL: it reset $$after more times after reaching safe mode"; exit 1; }
-	# a reset loop, deliberately, until the streak reaches its limit and safe mode stops it
-	$(call assert_boots,2,12,$(BUILD)/serial.log)
+	@# a deliberate reset loop, and it is deterministic: 6 boots in 100 runs of
+	@# 100, which is the streak reaching OBC_SHORT_BOOT_LIMIT plus the boot that
+	@# degrades instead of resetting a sixth time. -icount makes it exact.
+	$(call assert_boots,6,6,$(BUILD)/serial.log)
 	@echo "PASS (streak reached the limit, degraded, and stopped resetting)"
 	@$(MAKE) --no-print-directory clean >/dev/null
 
@@ -675,7 +717,7 @@ voter-one: $(TARGET)
 	     || { echo "FAIL: an unresolvable vote did not fail safe ($$state)"; exit 1; }; \
 	 fi; \
 	 echo "ok - $$state"
-	# a repaired or an unresolvable vote degrades; neither resets
+	@# a repaired or an unresolvable vote degrades; neither resets
 	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # Randomised corruption campaign. Deterministic given CAMPAIGN_SEED, which is
@@ -755,7 +797,7 @@ safe-one: $(TARGET)
 	   || { echo "FAIL: safe mode was not entered, or not for the right reason"; \
 	        grep -E 'mode|sched|boot' $(BUILD)/serial.log; exit 1; }; \
 	 echo "ok - $$(grep -F 'mode   : SAFE' $(BUILD)/serial.log | head -1 | sed 's/mode   : //')"
-	# trap resets and degrades on the next boot; overrun degrades in place
+	@# trap resets and degrades on the next boot; overrun degrades in place
 	$(call assert_boots,$(SAFE_BOOTS),$(SAFE_BOOTS),$(BUILD)/serial.log)
 
 # The clock entry needs a broken timer: no debugger write can make mtime
@@ -778,7 +820,7 @@ safe-clock:
 	   || { echo "FAIL: an unsettled clock did not degrade the system"; \
 	        grep -E 'mode|sched|boot' $(BUILD)/serial.log; exit 1; }; \
 	 echo "ok - SAFE, clock would not settle"
-	# a clock that will not settle degrades in place
+	@# a clock that will not settle degrades in place
 	$(call assert_boots,1,1,$(BUILD)/serial.log)
 	@$(MAKE) --no-print-directory clean >/dev/null
 
@@ -900,7 +942,7 @@ trap-one: $(TARGET)
 	        true;; \
 	 esac; \
 	 echo "ok -$${line#*reset  :}"
-	# the trap resets exactly once, and the second boot is the one that reports it
+	@# the trap resets exactly once, and the second boot is the one that reports it
 	$(call assert_boots,2,2,$(BUILD)/serial.log)
 
 # The validator must reject on either field alone. One test does not cover the
@@ -940,8 +982,10 @@ record-one: $(TARGET)
 	        || { echo "FAIL: the interrupt bit was lost:$$line"; exit 1; };; \
 	 esac; \
 	 echo "ok -$${line#*reset  :}"
-	# a rejected record is read on the boot after the one that wrote it
-	$(call assert_boots,1,2,$(BUILD)/serial.log)
+	@# the record is written and rejected inside one boot: 1, in 120 observations
+	@# over 40 runs. The 1..2 written here first was caution, and caution that
+	@# cannot fail is not an assertion.
+	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # --- Poisoned-RAM boot --------------------------------------------------------
 #
@@ -978,7 +1022,7 @@ test-poisoned: $(TARGET) $(BUILD)/poison.bin
 	 test $$found -eq 1 || { echo "FAIL: sentinel not seen, seed=$(POISON_SEED)"; \
 	                         cat $(BUILD)/poison.log; exit 1; }; \
 	 echo "PASS (seed=$(POISON_SEED))"
-	# poisoned RAM must be survived, not rebooted through
+	@# poisoned RAM must be survived, not rebooted through
 	$(call assert_boots,1,1,$(BUILD)/serial.log)
 
 # Reference measurement. Refuses to run on a dirty tree: a -dirty hash is not
@@ -1037,7 +1081,7 @@ test-tlm: $(TARGET)
 	@rm -f $(CONSOLE_LOG) $(DOWNLINK_BIN)
 	@timeout $(RUN_TIMEOUT_S) $(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
 	    $(PORTS) -kernel $(TARGET) >/dev/null 2>&1 || true
-	# nominal telemetry costs no boot
+	@# nominal telemetry costs no boot
 	$(call assert_boots,1,1,$(CONSOLE_LOG))
 	@grep -qF 'tlm    : layout ok' $(CONSOLE_LOG) \
 	  || { echo "FAIL: the descriptor audit did not pass, so no frame is trustworthy"; \
@@ -1067,7 +1111,7 @@ tlm-one: $(TARGET)
 	        tail -5 $(BUILD)/tlm-inject.log; exit 1; }; \
 	 python3 harness/runner/tlm_check.py --elf $(TARGET) --capture $(DOWNLINK_BIN) \
 	   --expect $(SENSOR_EXPECT) --sensor $(SENSOR_IDX)
-	# a lying sensor is flagged, never escalated to a reset
+	@# a lying sensor is flagged, never escalated to a reset
 	$(call assert_boots,1,1,$(CONSOLE_LOG))
 
 # Every detectable failure, on every sensor.
@@ -1144,7 +1188,7 @@ test-tlm-layout-broken:
 	@rm -f $(BUILD)/tlm-broken.bin
 	@timeout $(RUN_TIMEOUT_S) $(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
 	    -serial file:$(BUILD)/console-broken.log -serial file:$(BUILD)/tlm-broken.bin -kernel $(TARGET) >/dev/null 2>&1 || true
-	# a failed layout audit degrades and keeps running
+	@# a failed layout audit degrades and keeps running
 	$(call assert_boots,1,1,$(BUILD)/console-broken.log)
 	@grep -qF 'LAYOUT AUDIT FAILED' $(BUILD)/console-broken.log \
 	  || { echo "FAIL: a table with a wrong offset passed its own audit"; \
@@ -1237,7 +1281,7 @@ uart-stall-one:
 	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
 	 done; \
 	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null
-	# the whole point: a refused downlink must not cost the machine
+	@# the whole point: a refused downlink must not cost the machine
 	$(call assert_boots,1,1,$(CONSOLE_LOG))
 	@grep -qF 'UART-STALL-SET' $(BUILD)/stall.log \
 	  || { echo "FAIL: the injector never ran, so this proved nothing"; \

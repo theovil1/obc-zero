@@ -16,8 +16,8 @@ to the reserve, but exceeding a line requires changing this file and saying why.
 
 | Line | Milestone | Bytes | Share | Status |
 |---|---|---:|---:|---|
-| Stack | M0 | 1024 | 6.3 % | **Allocated**, 64 B peak measured |
-| `.data` + `.bss`, core | M0–M3 | 0 | 0.0 % | **In use**, currently empty |
+| Stack | M0 | 1024 | 6.3 % | **Allocated**, 112 B peak measured |
+| `.data` + `.bss`, core | M0–M3 | 0 | 0.0 % | **In use**, folded into the lines below |
 | Scheduler state and task table | M2 | 512 | 3.1 % | **In use**, 384 B measured |
 | Panic context and safe-mode state | M3 | 256 | 1.6 % | Planned |
 | Triple-redundant critical state | M4 | 3072 | 18.8 % | **In use**, 344 B measured |
@@ -108,6 +108,50 @@ the fault-tolerance work in M4 and M5 is exactly the kind that discovers a need
 for memory late. Spending the reserve early would be the easiest way to make
 this project fail at M8.
 
+## Projection to M8
+
+Done now rather than when the linker refuses. The two hungriest milestones are
+still ahead — M7 holds 2048 bytes for the command queue, M8 holds 4096 for the
+event log — and a budget that only balances in hindsight is arbitrated by
+whichever milestone arrives first.
+
+Measured on `0d1dfc2`, with every unbuilt line taken at its **full** reservation
+rather than at a guess:
+
+| | Bytes |
+|---|---:|
+| In use today, measured | 2044 |
+| M3 panic context, at its full line | 256 |
+| M7 command queue, at its full line | 2048 |
+| M8 event log, at its full line | 4096 |
+| **Total if every future line fills** | **8444 of 16384** |
+| **Margin** | **7940** |
+
+**It balances, with room.** No decision is needed before M7 and none is being
+deferred into one.
+
+Two figures worth having beside that, because they are where a future problem
+would come from:
+
+| | Bytes |
+|---|---:|
+| Reserved by the lines already built (M2, M4, M6) | 5632 |
+| Actually consumed by them | 840 |
+| Held and asleep | **4792** |
+
+**The 4792 is not slack to be spent.** Most of it is the M4 line: triple-redundant
+state costs three copies plus separation, and it grows every time an item becomes
+critical rather than when a milestone lands. One more critical item is 24 bytes of
+copies and nothing else; a dozen is still under a third of that line. The line is
+sized for a system that has decided what its critical state is, and ADR 0006 says
+that decision is not finished.
+
+What this projection would look like if it did **not** balance is worth saying,
+so the next person can tell: the answer would not be to shrink a line. It would
+be an ADR before M7 deciding which capability the board cannot have, because
+`.bss` is not negotiable at link time and the failure would arrive as a linker
+error on the day M8 was otherwise finished.
+
 ## Rules
 
 1. A milestone that needs more than its line updates this file first, in the
@@ -141,7 +185,8 @@ suspension log and the telemetry subsystem. The guard is not state: it is the
 padding that keeps the three critical regions apart, and it is charged here
 because it occupies RAM whatever its purpose.
 
-Remaining unallocated after the planned lines above: 3328 B.
+Remaining unallocated after the planned lines above: 3328 B. See the projection
+above for what happens when the planned lines are actually built.
 
 ## Flash
 

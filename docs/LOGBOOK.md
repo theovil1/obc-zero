@@ -5,6 +5,89 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — Les plages larges mesurées, et six essais ne prouvaient presque rien
+
+Trois distributions mesurées plutôt que bornées. Le résultat est le même partout
+et il condamne la prudence :
+
+| Cible | Runs | Distribution observée | Déclaré avant |
+|---|---:|---|---|
+| `test-wdt` | 100 | **2 boots ×100** | 2..6 |
+| `test-loop` | 100 | **6 boots ×100** | 2..12 |
+| `test-record` | 40 (120 obs.) | **1 boot ×120** | 1..2 |
+
+Sous `-icount` la machine est déterministe et je le savais ; j'ai quand même
+écrit des intervalles. Une plage qui ne peut pas échouer n'affirme rien, et c'est
+exactement le défaut du seuil à 200 000 instructions de M3 — sauf que celle-ci le
+fait discrètement, en ayant la forme d'une assertion. Les quinze déclarations
+sont exactes maintenant.
+
+`make boots-distribution TARGET_UNDER_TEST=... RUNS=...` les redérive, et chaque
+run imprime son compte observé pour ça.
+
+### Ce que six essais établissaient réellement
+
+`test-wdt` échouait à environ 12 %. À ce taux, **six essais ont 46 % de chance de
+ne rien voir**. La reproduction de M4 était un tirage à pile ou face lu comme une
+preuve.
+
+Ce qu'un run propre de n essais écarte, à 95 % de confiance :
+
+| Essais | Écarte les taux au-dessus de |
+|---:|---:|
+| 6 | 39 % |
+| 10 | 26 % |
+| 24 | 12 % |
+| 100 | 3 % |
+
+Corollaire sur ma propre séance : les « 10 verts sur 10 » que j'ai annoncés après
+le correctif n'écartaient que les taux au-dessus de 26 %. Les 100 runs de la
+distribution, tous propres, les écartent au-dessus de 3 %. C'est la mesure qui
+vaut, pas celle que j'avais annoncée.
+
+**Choisir n à partir du plus petit taux qui vaut la peine d'être attrapé** :
+`ln(0.05) / ln(1 - p)`. 24 pour un défaut sur huit, 59 pour un sur vingt, 299
+pour un sur cent. Noté à côté de l'entrée M4, pas pour la corriger — la procédure
+était bonne, c'est le nombre qui était repris plutôt que choisi.
+
+Et une chose que l'entrée M4 ne permet pas de trancher : savoir si c'était déjà
+cette course. Elle enregistre le nombre de tentatives et pas le texte de
+l'échec. Une entrée écrite pour être le premier point de données doit porter le
+symptôme.
+
+### Un contrôle qui refusait de la prose légitime
+
+Le hook de pré-commit a bloqué deux lignes de ce journal. Un de ses motifs, un
+sigle de deux lettres encadré de frontières de mot, attrapait la forme élidée du
+verbe *avoir* : l'apostrophe est un caractère non-mot, donc la frontière tombe
+juste après elle. Or ce journal est explicitement autorisé en français.
+
+Corrigé au plus juste — seule une apostrophe immédiatement précédente est
+exclue, le sigle isolé reste attrapé dans les deux casses, et la commande de
+vérification est écrite dans le hook lui-même.
+
+Ce n'est pas une complaisance : **un contrôle qui refuse du contenu légitime est
+un contrôle en route vers la désactivation.** Le faux positif et le faux rouge
+ont le même coût, qui est d'apprendre à contourner.
+
+Et il a eu raison deux fois de suite ensuite, sur la version corrigée de ce
+paragraphe : j'y citais le motif littéralement, et le nom d'un fichier
+d'instructions qui n'a pas sa place dans du contenu suivi. Le contrôle a attrapé
+son propre auteur en train d'écrire sur lui.
+
+### Budget RAM projeté jusqu'à M8
+
+Fait maintenant plutôt qu'au refus du linker. 2044 octets consommés, plus 6400
+si M3, M7 et M8 remplissent leurs lignes entières : **8444 sur 16384**, marge
+7940. Ça tombe, et aucune décision n'est reportée.
+
+Les lignes déjà construites réservent 5632 et consomment 840. Les 4792 endormis
+sont surtout la ligne M4 : l'état triple-redondant grossit quand un élément
+devient critique, pas quand un jalon arrive, et l'ADR 0006 dit que cette décision
+n'est pas finie.
+
+---
+
 ## 2026-08-21 — La survie devient une déclaration, et un faux rouge mesuré à 1 sur 8
 
 Pas une mesure du binaire : aucun code de vol n'a changé. Deux mesures du
@@ -463,6 +546,34 @@ reproducing the original sequence: pass. Re-run immediately after another
 Classified transient because it resisted reproduction, not because that was the
 convenient reading — which is the distinction the false-red entry above is
 about. If it returns, this paragraph is the first data point.
+
+> **Added 2026-08-21, and not a correction.** The procedure was right; six is
+> the wrong number, and it was taken rather than chosen.
+>
+> `test-wdt` was later found failing at about 12 %. At that rate, six attempts
+> have a **46 % chance of seeing nothing at all** — the reproduction above is
+> close to a coin toss, and it was read as evidence.
+>
+> What a clean run of n attempts actually establishes, at 95 % confidence:
+>
+> | Attempts | Rules out rates above |
+> |---:|---:|
+> | 6 | 39 % |
+> | 10 | 26 % |
+> | 24 | 12 % |
+> | 100 | 3 % |
+>
+> So six clean attempts say only that the defect is not more frequent than about
+> two runs in five. **Choose n from the smallest rate worth catching**: 24 for a
+> one-in-eight defect, 59 for one in twenty, 299 for one in a hundred. Each is
+> `ln(0.05) / ln(1 - p)` and takes a second to compute.
+>
+> **Whether this was already the `test-wdt` race cannot be determined**, and that
+> is the more useful finding. The entry records the count of attempts and not the
+> failure text, so there is nothing to compare against. `make test` and
+> `test-wdt` are different targets with different assertions, which argues
+> against — but only argues. An entry written to be the first data point has to
+> carry the symptom, or the second data point has nothing to match.
 
 ### Also
 

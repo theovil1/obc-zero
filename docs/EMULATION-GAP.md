@@ -14,10 +14,33 @@ it, because its value is as a whole. **When the board arrives, this is the list
 of what breaks**, and a list assembled from eight ADRs on the afternoon it is
 needed is a list with holes in it.
 
+## Status at a glance
+
+**The column that matters is the last one.** At twenty entries nobody will read
+the prose to find out which gaps are still risks, and a list where that cannot be
+seen at a glance is a list that stops being consulted.
+
+| # | Gap | Status |
+|---|---|---|
+| 1 | RAM comes up zeroed | **Covered** — `make test-poisoned` |
+| 2 | The UART never refuses a byte | **Partial** — policy covered by `make test-uart-stall`; duration open |
+| 3 | Instruction timing has no memory system | **Open** — nothing compensates; every budget must be re-derived |
+
+Three states and no others:
+
+- **Covered** — a test on this machine produces the hardware's behaviour, and it
+  is named. The gap is closed and the entry stays, because the entry is the only
+  record of why that test exists.
+- **Partial** — part of the behaviour is reproduced and part is not. The entry
+  says which part, in those words. "Partial" without that sentence is "open".
+- **Open** — nothing compensates. This is an allowed and useful answer, and it is
+  better than a compensation invented to fill the column.
+
 ## How to read an entry
 
 | Field | Meaning |
 |---|---|
+| **Status** | Covered, Partial or Open — and the table above must agree |
 | **Found** | The milestone and commit where the gap became visible |
 | **The emulator** | What QEMU does |
 | **The hardware** | What the FE310 will do instead |
@@ -29,6 +52,7 @@ needed is a list with holes in it.
 
 ## 1. RAM comes up zeroed
 
+- **Status:** **Covered** — `make test-poisoned`
 - **Found:** M1, `3fdb632`
 - **The emulator:** QEMU zeroes DTIM at reset. Every uninitialised word reads 0.
 - **The hardware:** SRAM at power-on holds whatever the cells settled into —
@@ -48,6 +72,8 @@ needed is a list with holes in it.
 
 ## 2. The UART never refuses a byte
 
+- **Status:** **Partial** — the policy is covered by `make test-uart-stall`; the
+  *duration* is not reproduced by anything and is the part the hardware changes
 - **Found:** M6, and closed as far as it can be at `624ec76`
 - **The emulator:** the chardev accepts every byte the instant it is offered.
   `sifive_uart` does model an eight-entry transmit FIFO and does set the full
@@ -74,6 +100,7 @@ needed is a list with holes in it.
 
 ## 3. Instruction timing has no memory system in it
 
+- **Status:** **Open** — nothing compensates
 - **Found:** M1, ADR 0002; restated here because it underlies both entries above
 - **The emulator:** `-icount shift=6` retires one instruction per fixed tick
   quantum. No cache, no flash wait states, no bus contention.
@@ -100,10 +127,13 @@ needed is a list with holes in it.
 2. **"What the port must do" is a change, not a direction.** "Revisit the
    timing" is not an entry; "re-derive every budget and expect per-task ratios"
    is.
-3. **"Covered by: nothing" is an allowed answer** and is more useful than a
-   compensation invented to fill the column. Entry 2 says "partially" and says
-   which part.
-4. **A closed gap stays in the file.** Entry 1 is closed; removing it would lose
+3. **Open is an allowed answer** and is more useful than a compensation invented
+   to fill the column. Entry 2 is Partial and says which part, in the status line
+   itself rather than in the prose below it.
+4. **The summary table and the entries must agree.** Two places to state a status
+   is one place too many, and the table is the one people will read — so an entry
+   whose status changes changes both, in the same commit.
+5. **A closed gap stays in the file.** Entry 1 is closed; removing it would lose
    the reason `test-poisoned` exists, and the next person to find that test
    expensive would delete it.
 
