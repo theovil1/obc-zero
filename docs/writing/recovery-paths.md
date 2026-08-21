@@ -13,8 +13,8 @@ Each of those is invisible to the test you would naturally write, because the
 code does exactly what it says and the system behaves exactly as designed. The
 only thing missing is the part nobody thought to observe.
 
-What follows is six cases, grouped by how they hide rather than by the order I
-found them. The context is a small RISC-V system — 16 KiB of RAM, a cyclic
+What follows is eight of them, grouped by how they hide rather than by the order
+I found them. The context is a small RISC-V system — 16 KiB of RAM, a cyclic
 executive, no operating system — but nothing below depends on that. If you write
 firmware, drivers, supervisors, or anything with an error path you cannot easily
 reach, the shapes should be familiar.
@@ -162,31 +162,6 @@ thinking about the false failure you are trying to prevent, and that direction
 gets your attention. The other direction — *did the thing actually happen* — is
 the one you write only if you decide, as a rule, always to write it.
 
-### The scrubber that has never scrubbed
-
-Included because it is unresolved, and because the honest version of this list
-has to contain one.
-
-Critical state is stored in triplicate and read through a voter that repairs a
-dissenting copy. A periodic scrubber walks the copies and repairs them without
-anyone needing to read the value.
-
-Its cost is measured: 221 instructions of a 3000-instruction budget. It has never
-repaired anything. The only critical state I have is read several times per
-frame, so read-repair always reaches a corruption first — measured directly: the
-repair counter is already at 1 by the time the scrubber is first called.
-
-For one hot variable, the scrubber is redundant. It stops being redundant the
-moment there is state written once and read rarely, where a single corruption
-can wait hours for its next read while a second one arrives and turns a
-recoverable vote into an unrecoverable one.
-
-So the acceptance criterion stays unticked. **Its cost is measured; it has never
-been shown to work.** Ticking it would be claiming a mechanism was validated when
-only its price was known, and those are not the same claim.
-
----
-
 ## Group three: the instrument lies
 
 The first two groups are about the system. This one is about the thing measuring
@@ -310,7 +285,22 @@ the injected failure landed on another, and the system returned an error without
 recovering at all. Where a voter has three copies, corrupt each one; they are not
 symmetric in the code even when they are symmetric in the design.
 
-**4. A check that can detect a violation must refuse to proceed.**
+**4. A measured cost is not a validated mechanism.**
+
+The clearest case in this project is one I have *not* listed above, because it is
+not yet a defect: a periodic scrubber that walks redundant copies and repairs
+them. Its cost is measured — 221 instructions of a 3000-instruction budget — and
+it has never repaired anything. The only state it guards is read several times
+per frame, so read-repair reaches every corruption first. Measured directly: the
+repair counter is already at 1 by the time the scrubber is first called.
+
+For one frequently-read variable the scrubber is redundant, and it stops being
+redundant the moment there is state written once and read rarely. So the
+acceptance criterion stays unticked. Ticking it would claim a mechanism was
+validated when only its price was known, and those are different claims — one is
+a measurement, the other is evidence.
+
+**5. A check that can detect a violation must refuse to proceed.**
 
 I built four mechanisms correctly and shipped each without a refusal, and
 violated every one of them myself:
