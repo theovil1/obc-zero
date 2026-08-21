@@ -5,6 +5,125 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M4: the voter, and a harness that lied about which subsystem broke
+
+**Measured commit:** `b42e1cb8a1ed48d3eb461621eb230e764dc6fbe8`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+**Branch:** `feat/m4-redundant-state`
+
+### The criterion was written first, and it refused most of the state
+
+ADR 0006 fixed what "critical" means before any of M4 existed, because deciding
+it while the budget refuses makes the word mean "whatever fit". Four clauses:
+a corruption must change what the system *does* rather than what it reports; the
+wrong behaviour must not be self-evident; the value must not be recomputable
+from something more trustworthy; and three copies must be affordable on the line
+rather than out of the reserve.
+
+Applied to the state that exists, it admits **one live variable**: `obc_mode`,
+four bytes. Task counters are reported and never acted on. The trace is
+observability. The mode's *reason* explains but decides nothing. The two
+persistent records already carry magic and checksum, which answers a different
+question — "is this worth believing after a reset" rather than "which of three
+disagreeing copies is right now" — and triplicating them would protect the same
+state twice with the second mechanism adding nothing.
+
+Recording what the criterion **rejects** turned out to be the more useful half.
+A list of survivors invites the reader to wonder what was overlooked; a list
+with verdicts does not.
+
+### The guard is the one place RAM holding nothing is doing something
+
+Interleaving the three copies with `.bss` and `.noinit` gave 404 bytes of
+separation between the first two and **56 between the last two**, because
+`.noinit` is only 48 bytes. Fifty-six bytes is fourteen words. A wild pointer
+crosses that without noticing, and a burst wide enough to span two copies is
+exactly the threat the separation exists to answer.
+
+A 320-byte guard brings both gaps to roughly 400. M4's line is 3072 bytes and
+the copies themselves cost 24, so the guard is affordable several times over —
+and this is what the line was allocated for. Total M4 consumption: **356 bytes
+of 3072.** The rest returns to the reserve.
+
+### Two design points that are not obvious
+
+**The checksum seeds differ per copy.** A corruption that writes the same
+pattern over two copies — a burst, a stuck DMA, a pointer walking forward —
+would leave both self-consistent under a shared seed, and the voter would read
+that as agreement. Different seeds mean identical corruption produces two copies
+that each fail their own check.
+
+**The vote excludes before it compares.** A copy failing its own checksum is
+dropped before any comparison, because two corrupted copies that happen to match
+would otherwise form a majority of two and win against the one surviving good
+copy. Filter, then vote — never the reverse.
+
+**An unresolvable vote returns nothing.** Not a survivor, not a guess. A value
+the system cannot vouch for is worse than an admission that it cannot, and the
+caller fails safe. The two guesses are not symmetric: nominal resumes work that
+was suspended because something was wrong, degraded suspends work that may have
+been fine, and only the second is recoverable by a human.
+
+### Tested once per copy, and once per pair
+
+| Injection | Result |
+|---|---|
+| copy a, single bit | `repairs=1 unresolved=0 mode=0`, 30 dispatches |
+| copy b, single bit | `repairs=1 unresolved=0 mode=0`, 30 dispatches |
+| copy c, single bit | `repairs=1 unresolved=0 mode=0`, 30 dispatches |
+| copies a+b | `unresolved=66 mode=1` |
+| copies b+c | `unresolved=66 mode=1` |
+| copies c+a | `unresolved=66 mode=1` |
+
+Six runs, not one. The three copies are not symmetric in the code — one is read
+first, one is compared against, one settles the vote — and M3 had already
+produced a criterion that would have been ticked on a path wired to one of three
+call sites.
+
+Randomised campaign: **100 runs at seed 1, zero failures.** The criterion asks
+for 1000 and that stays unticked; a tenth of a criterion is not the criterion.
+
+### The finding: a harness that lied about which subsystem broke
+
+Running the campaign in the background while the ordinary suite ran produced six
+confident failures — `test-sched`, `test-poisoned`, `test-trap`, `test-record`,
+`test-safe`, `test-sched-repro` — every one of them naming a subsystem that was
+working perfectly.
+
+The cause is that every injector and every dump hardcodes `localhost:1234`, and
+QEMU is started with `-s`, which is that same port. Two runs cannot coexist: the
+second QEMU fails to bind, the debugger attaches to the first one's target, and
+the failures describe a system nobody was testing.
+
+**That is worse than a harness that stops.** A collision that produced a clean
+"port in use" error would have cost a minute. A collision that produces six
+specific, plausible, entirely wrong failure reports costs however long it takes
+to stop trusting them — and if it had happened during a campaign whose results
+were being written up, it would have put fiction in a report.
+
+Recorded in the backlog as an M9 requirement: a port per run, a serial log per
+run, and a check that the port is free before starting, so that a collision
+fails by naming ports rather than by naming the scheduler. It blocks M10
+directly, where 1000 runs is half an hour that cannot overlap with anything.
+
+### Measurement
+
+`make measure` on `b42e1cb`:
+
+```
+   text    data     bss     dec     hex filename
+   5106       4    1824    6934    1b16 build/obc.elf
+
+size: matches docs/size-reference.txt
+deps: no compiler or library helpers linked in
+All checks passed!
+```
+
+RAM 1828 B of 16384 B. M4 took 356 B of its 3072 B line: 24 for three copies,
+320 for the guard, 12 for the counters. Scrubber at 221 instructions of 3000.
+
+---
+
 ## 2026-08-20 — M3: the error model, and a safe mode that had to be defined twice
 
 **Measured commit:** `d2559fccad822d1b86e8cbd427f7d0c0cae1b5a9`
