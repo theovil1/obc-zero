@@ -1,5 +1,6 @@
 # gcc      14.2.0
 # binutils 2.45.50.20251209
+# ignores  13
 .bss          396
 .data           4
 .init         158

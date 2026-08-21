@@ -51,11 +51,18 @@ it is `const` and lives in flash, which also means a corrupted RAM word cannot
 turn a period into something else or redirect a function pointer. Only the
 mutable per-task accounting is charged to RAM.
 
-**Triple-redundant critical state, 3072 B.** Three copies of a 1 KiB state
-block. This is the single largest functional line, and deliberately so: it is
-the mechanism the whole project exists to demonstrate. If 1 KiB of critical
-state proves too tight, the answer is to reduce what counts as critical, not to
-drop to two copies. Two copies detect corruption but cannot vote on it.
+**Triple-redundant critical state, 3072 B — a ceiling, and one M4 does not
+approach.** Three copies of up to 1 KiB. If 1 KiB of critical state ever proves
+too tight, the answer is to reduce what counts as critical, not to drop to two
+copies: two copies detect corruption but cannot vote on it.
+
+What counts as critical is decided by the criterion in ADR 0006, written before
+M4 rather than while the budget was refusing — otherwise "critical" comes to
+mean "whatever fit". Applied to the state that exists, it admits **one live
+variable, `obc_mode`, four bytes**. The rest of this line stays unspent and
+returns to the reserve. The list is expected to grow as M5, M7 and M8 arrive
+with state that must be argued against the criterion rather than assumed into
+it.
 
 **Event log, 4096 B.** The largest line overall. An event log that wraps too
 quickly cannot explain an anomaly after the fact, which defeats its purpose. If

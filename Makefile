@@ -145,12 +145,21 @@ $(BUILD)/%.o: %.S Makefile
 size: $(TARGET)
 	@$(SIZE) $(TARGET)
 
-# --- Size reference -----------------------------------------------------------
+# --- Pinned reference ---------------------------------------------------------
 #
 # docs/BUDGET.md is a register of claims about memory consumption. A claim is
 # only worth something if a figure cannot move without someone noticing, so the
 # per-section sizes are pinned in a versioned reference and compared on every
 # measurement. Any drift fails the build.
+#
+# The count of deliberate status discards is pinned the same way, and for the
+# same reason. OBC_IGNORE is better than the bare (void) cast most projects use
+# because each abandonment has to be written as one — but a number nobody
+# watches is not a control. It went from 9 to 13 during a single milestone
+# without anyone deciding that it should, which is the whole argument: unpinned,
+# the mechanism documents the drift instead of containing it.
+#
+# Raising it is allowed and sometimes right. Raising it silently is not.
 #
 # The point is not to freeze the image. It is to make every size change a
 # deliberate act: run `make size-accept` and say why in the commit message.
@@ -170,6 +179,7 @@ $(SIZE_ACTUAL): $(TARGET)
 	@mkdir -p $(dir $@)
 	@{ echo "# gcc      $$($(CC) -dumpversion)"; \
 	   echo "# binutils $$($(CROSS)ld --version | head -1 | grep -oE '[0-9]+\.[0-9]+[.0-9]*' | head -1)"; \
+	   echo "# ignores  $$(grep -rho 'OBC_IGNORE(' flight/ --include='*.c' | wc -l | tr -d ' ')"; \
 	   $(SIZE) -A $(TARGET) \
 	     | grep -E '^($(SIZE_SECTIONS))[[:space:]]' \
 	     | awk '{ printf "%-10s %6d\n", $$1, $$2 }' \
@@ -182,10 +192,12 @@ size-check: $(SIZE_ACTUAL)
 	@if diff -u $(SIZE_REF) $(SIZE_ACTUAL) > $(BUILD)/size.diff 2>&1; then \
 	  echo "size: matches $(SIZE_REF)"; \
 	else \
-	  echo "FAIL: section sizes drifted from $(SIZE_REF)"; \
+	  echo "FAIL: a pinned figure drifted from $(SIZE_REF)"; \
 	  echo; sed '1,2d' $(BUILD)/size.diff; echo; \
 	  echo "If this change is intended, run 'make size-accept' and explain it"; \
 	  echo "in the commit message. If it is not, you have just found something."; \
+	  echo "An 'ignores' line that moved means the system stopped caring about a"; \
+	  echo "return value somewhere new. That is a decision, so decide it."; \
 	  exit 1; \
 	fi
 
