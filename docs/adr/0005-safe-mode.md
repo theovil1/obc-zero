@@ -1,7 +1,7 @@
 # ADR 0005: Safe mode, defined in terms of what exists
 
 - **Status:** accepted
-- **Date:** 2026-08-20
+- **Date:** 2026-08-21
 - **Milestone:** M3
 - **Extends:** ADR 0003, which fixed the executive's properties
 

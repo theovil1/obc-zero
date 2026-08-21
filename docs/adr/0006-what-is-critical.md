@@ -1,7 +1,7 @@
 # ADR 0006: What counts as critical state
 
 - **Status:** accepted
-- **Date:** 2026-08-20
+- **Date:** 2026-08-21
 - **Milestone:** decided before M4 is written
 - **Extends:** ADR 0005
 

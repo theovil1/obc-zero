@@ -339,6 +339,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--build", type=Path, default=Path("build"))
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument("--timeout", type=float, default=40.0)
+    parser.add_argument(
+        "--status",
+        type=Path,
+        default=Path("build/campaign-status.txt"),
+        help=(
+            "file rewritten with the current frame on every run. Redirecting "
+            "stdout to a log appends frames instead of redrawing them, so "
+            "following that log scrolls a wall of stale dashboards. This holds "
+            "one frame and only ever the latest."
+        ),
+    )
     args = parser.parse_args(argv[1:])
 
     if not args.elf.exists():
@@ -358,7 +369,10 @@ def main(argv: list[str]) -> int:
     live = sys.stdout.isatty()
     height = 0
 
-    print(f"  seed {args.seed}, image {args.elf}, commit {commit}\n")
+    print(f"  seed {args.seed}, image {args.elf}, commit {commit}")
+    if not live and args.status:
+        print(f"  watch it with:  watch -n 1 -t cat {args.status}")
+    print()
 
     for inj in injections:
         verdict = run_one(args.elf, args.build, inj, args.timeout)
@@ -373,6 +387,16 @@ def main(argv: list[str]) -> int:
             tally.failures.append(verdict)
 
         frame = render(tally, args.runs, started, live)
+
+        # Always, whether or not stdout is a terminal. A campaign launched in
+        # the background is exactly the one somebody wants to watch, and it is
+        # the one whose stdout is a file.
+        if args.status:
+            args.status.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.status.with_suffix(".tmp")
+            temporary.write_text(frame + "\n", encoding="utf-8")
+            temporary.replace(args.status)
+
         if live:
             if height:
                 sys.stdout.write(f"\033[{height}A")

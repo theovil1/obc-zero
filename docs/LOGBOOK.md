@@ -5,7 +5,88 @@ measured, not what was intended.
 
 ---
 
-## 2026-08-20 — M4: the voter, and a harness that lied about which subsystem broke
+## 2026-08-21 — M4 campaign: 1000 runs, and two counters that mean different things
+
+**Measured commit:** `976c9f0` (dirty at run time — the dashboard tooling was
+being written alongside; the voter under test is `b42e1cb`)
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### The result
+
+```
+1000/1000   100.0%
+passed    1000    elapsed 14m40s
+failed       0    rate    1.14/s
+corrupted copy   a  320  b  324  c  356
+corruption depth 1 copy  481  2 copies  519
+```
+
+Zero failures. Report at `docs/reports/2026-08-21-m4-voter-campaign.md`, naming
+the seed and stating what the campaign does not cover.
+
+The coverage numbers are the ones worth reading. 320 / 324 / 356 across the
+three copies, and 481 single against 519 double, without any of it being forced
+— the plan is generated from the seed and the balance is what a fair random
+draw looks like. The live breakdown exists to catch the opposite case: a
+campaign that hammers one copy for fourteen minutes and reports a thousand green
+runs.
+
+### The two counters do not count the same kind of thing
+
+The campaign reported **481 repairs** and **34254 unresolved votes**, which reads
+like an imbalance and is not one.
+
+481 repairs over 481 single-corruption runs is exactly 1.000 per run. One copy
+corrupted, one repair, majority restored for good. There is nothing to repair in
+the other 519 runs, which is the whole point of the double-corruption case.
+
+34254 over 519 double runs is exactly **66.000 per run**, and the constancy is
+itself informative: the system is mechanically deterministic. Sixty-six is not a
+count of corruptions, it is a count of *failed votes* —
+`obc_mode_is_safe()` is called once per task per frame, 4 × 16 = 64, plus two
+checks outside the loop, and every one of them fails again once nothing can
+repair the copies.
+
+**Mechanically correct, semantically misleading.** An escalation ladder needs
+"how many times did the system *enter* an unresolvable state", not "how many
+times did it *observe* that it was in one". One irreparable corruption reads as
+66 in sixteen frames and as several million over a 72-hour soak, which is noise
+rather than information.
+
+Not fixed here, deliberately. Changing the counter would invalidate the campaign
+that had just run against it, and re-running is fifteen minutes. Recorded in the
+backlog for M5, which has to touch these counters anyway for its reset-loop
+protection.
+
+### The live view earned itself, and my first instruction for it was wrong
+
+I told the user to follow the campaign with `tail -f`. That was wrong and
+obviously so in hindsight: redirecting the dashboard to a file **appends** each
+frame instead of redrawing it, so following the file scrolls a wall of stale
+dashboards rather than showing one live one.
+
+The tool now writes a status file containing only the current frame, replaced
+atomically on every run, so `watch -n 1 -t cat` gives a stable view whether or
+not the process owns a terminal. It also prints that command itself when it
+detects that stdout is not a TTY, which is the moment somebody is about to need
+it.
+
+The general shape of the mistake is familiar from this project: a mechanism that
+works when observed one way and misleads when observed another, and nobody finds
+out until it is used for real.
+
+### Dates corrected across the logbook
+
+This session crossed midnight. Every entry was dated 2026-08-20 while M2 through
+M4 were committed on the 21st. Each entry is now dated on the commit it
+measures, and four ADRs written on the 21st carried the 20th.
+
+A logbook whose dates cannot be reconciled against `git log` is one nobody can
+use to reconstruct what happened, which is the only reason it exists.
+
+---
+
+## 2026-08-21 — M4: the voter, and a harness that lied about which subsystem broke
 
 **Measured commit:** `b42e1cb8a1ed48d3eb461621eb230e764dc6fbe8`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
@@ -124,7 +205,7 @@ RAM 1828 B of 16384 B. M4 took 356 B of its 3072 B line: 24 for three copies,
 
 ---
 
-## 2026-08-20 — M3: the error model, and a safe mode that had to be defined twice
+## 2026-08-21 — M3: the error model, and a safe mode that had to be defined twice
 
 **Measured commit:** `d2559fccad822d1b86e8cbd427f7d0c0cae1b5a9`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
@@ -247,7 +328,7 @@ ruff is absent.
 
 ---
 
-## 2026-08-20 — M2: the executive, and the property that had to come first
+## 2026-08-21 — M2: the executive, and the property that had to come first
 
 **Measured commit:** `4df8c5d43f306053e4b0bd8e3ee240913e1ae052`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
@@ -372,7 +453,7 @@ the harness grows further.
 
 ---
 
-## 2026-08-20 — M1 closed: deliberate reset, and a guard for what the compiler adds
+## 2026-08-21 — M1 closed: deliberate reset, and a guard for what the compiler adds
 
 **Measured commit:** `76f7ca8c03fd7536db6145d7a6aa1fbd59e1e317`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1
@@ -474,7 +555,7 @@ structure, not only the behaviour.
 
 ---
 
-## 2026-08-20 — The thesis, demonstrated on my own code
+## 2026-08-21 — The thesis, demonstrated on my own code
 
 **Measured commit:** `1d767f97600c91d834a7b47b8323485e2e75ba32`
 **Toolchain:** GCC 14.2.0, QEMU 10.2.1

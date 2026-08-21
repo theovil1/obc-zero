@@ -1,7 +1,7 @@
 # ADR 0004: The execution trace is flight code, not instrumentation
 
 - **Status:** accepted
-- **Date:** 2026-08-20
+- **Date:** 2026-08-21
 - **Milestone:** decided at the end of M2, binding on M4, M6 and M8
 - **Extends:** ADR 0002 and ADR 0003
 

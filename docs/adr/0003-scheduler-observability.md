@@ -1,7 +1,7 @@
 # ADR 0003: What the scheduler must prove, and what it will not enforce
 
 - **Status:** accepted
-- **Date:** 2026-08-20
+- **Date:** 2026-08-21
 - **Milestone:** decided before M2 is written
 - **Extends:** ADR 0002, which fixed the two time domains
 
