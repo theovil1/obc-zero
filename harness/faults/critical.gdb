@@ -22,7 +22,16 @@ set confirm off
 set pagination off
 
 set architecture riscv:rv32
-target remote localhost:1234
+
+# The port is a parameter, not a constant. Every injector used to assume it
+# owned 1234, which meant two runs could not coexist: the second QEMU failed to
+# bind, the debugger attached to the first one's target, and the failures named
+# subsystems that were working perfectly. Defaults to 1234 for the single-run
+# targets that predate this.
+if $_isvoid($campaign_port)
+  set $campaign_port = 1234
+end
+eval "target remote localhost:%d", $campaign_port
 
 # Before the window opens, so the first vote of the first frame is the one that
 # meets the corruption.

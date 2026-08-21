@@ -501,26 +501,16 @@ voter-one: $(TARGET)
 CAMPAIGN_SEED ?= 1
 CAMPAIGN_RUNS ?= 20
 
+# Live view while it runs. A campaign takes long enough that the only
+# alternative to watching it is not watching it, and a campaign nobody watches
+# is one where a systematic failure is found at the end instead of at run ten.
+#
+# Allocates a port per run, so it no longer blocks every other test for half an
+# hour. Writes a dated report naming its seed: a result that cannot be replayed
+# is an anecdote.
 test-voter-campaign: $(TARGET)
-	@echo "voter: $(CAMPAIGN_RUNS) randomised corruptions, seed=$(CAMPAIGN_SEED)"
-	@$(PY) -c "import random; r=random.Random($(CAMPAIGN_SEED)); \
-	  print('\n'.join(f'{r.randint(1,2)} {r.randint(0,2)} {r.randint(0,31)}' \
-	  for _ in range($(CAMPAIGN_RUNS))))" > $(BUILD)/campaign.txt
-	@n=0; fail=0; \
-	 while read copies first bit; do \
-	   n=$$(( n + 1 )); \
-	   if $(MAKE) --no-print-directory CRIT_N=$$copies CRIT_FIRST=$$first \
-	        CRIT_BIT=$$bit voter-one > $(BUILD)/campaign-run.txt 2>&1; then \
-	     printf "."; \
-	   else \
-	     fail=$$(( fail + 1 )); \
-	     printf "\n  FAIL run %s: copies=%s first=%s bit=%s\n" "$$n" "$$copies" "$$first" "$$bit"; \
-	     tail -3 $(BUILD)/campaign-run.txt; \
-	   fi; \
-	 done < $(BUILD)/campaign.txt; \
-	 echo; \
-	 echo "  $$n runs, $$fail failures, seed=$(CAMPAIGN_SEED)"; \
-	 test $$fail -eq 0
+	@$(PY) harness/runner/campaign.py \
+	   --runs $(CAMPAIGN_RUNS) --seed $(CAMPAIGN_SEED) --elf $(TARGET)
 
 # --- Safe mode ----------------------------------------------------------------
 #
