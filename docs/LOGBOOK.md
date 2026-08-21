@@ -5,6 +5,68 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — Trois frontières tranchées avant M7, et un contrôle d'image
+
+Pas de mesure du binaire : aucun code de vol n'a changé. Trois décisions et un
+contrôle.
+
+### Les compteurs écrits par l'extérieur saturent
+
+Un compteur de rejets est de la mémoire que l'extérieur écrit. Deux conséquences
+qui ne valaient pour aucun compteur construit jusqu'ici.
+
+Il boucle si on le laisse faire, et un compteur 16 bits qui a fait le tour affiche
+un petit nombre : un flot soutenu se lit comme une poignée de rejets. **Saturer
+veut dire « au moins tant »**, et au plafond la valeur reste vraie.
+
+Et la trame garde sa taille. **Rien de ce que l'extérieur envoie ne change le
+nombre de champs d'une trame**, sinon le sol décode contre une disposition que le
+véhicule a choisie sous la direction de quelqu'un d'autre.
+
+Ce que ça ne prétend pas être : une défense. Un flot coûte toujours la liaison, le
+dispatch et l'attention de l'opérateur. C'est une garantie sur le *rapport* — que
+le nombre dans la trame ne mente jamais — et rien d'autre.
+
+### La plage d'un argument et le rejet d'un argument ne sont pas la même chose
+
+Deux choses qui partagent un mot, et la confusion est à une frappe de distance
+dans les deux sens.
+
+| Propriété | Vérifiée |
+|---|---|
+| `min <= max` de chaque argument | au sol, contre le binaire |
+| chaque opcode a un gestionnaire | au sol, contre le binaire |
+| le nombre d'arguments tient dans la trame | assertion de compilation |
+| *cet* argument est dans *sa* plage | **un refus, à chaque fois, en vol** |
+
+Les deux erreurs échouent en sens opposés. Une assertion statique là où il faut un
+refus : la table déclare une plage, tout le monde lit « les arguments sont
+validés », et le véhicule exécute le nombre qui arrive. Un refus là où il faut une
+assertion statique : c'est le défaut que M6 a livré et retiré dans l'heure.
+
+### Le fuzzing tourne sur l'image qui vole
+
+`make flight-image-check` lit la map et refuse si un objet hors de `flight/` a été
+lié. Il garde toutes les campagnes, pas seulement celle de M7 — la campagne du
+voteur devait tourner sur l'image de vol depuis toujours et rien ne le disait.
+
+Le coût est mesuré et non supposé : le stub de blocage UART ajoutait cinq
+instructions à une boucle qui en fait cinq, et poussait le dispatch de 2746 à 3949
+pour 3000 de budget — dépassement, échelle, réinitialisation machine. L'instrument
+a déplacé le système à travers le seuil exact qu'il mesurait.
+
+Pré-vol, pas post-mortem. Lire la map coûte des millisecondes ; une campagne coûte
+des minutes.
+
+### Le format de classement en transitoire
+
+Symptôme, nombre d'essais, et ce que ce nombre écarte. Les trois, sinon l'entrée
+n'est pas un point de données. L'entrée de M4 est antérieure et ne peut pas être
+rattrapée : le texte de l'échec n'a jamais été capturé. C'est le coût, payé une
+fois, et c'est pour ça que le format existe au lieu d'être une préférence.
+
+---
+
 ## 2026-08-21 — Les plages larges mesurées, et six essais ne prouvaient presque rien
 
 Trois distributions mesurées plutôt que bornées. Le résultat est le même partout
@@ -574,6 +636,11 @@ about. If it returns, this paragraph is the first data point.
 > `test-wdt` are different targets with different assertions, which argues
 > against — but only argues. An entry written to be the first data point has to
 > carry the symptom, or the second data point has nothing to match.
+>
+> The format is fixed now — symptom, attempts, and what the attempts rule out,
+> all three or it is not a data point. **This entry predates it and cannot be
+> retrofitted**: the failure text was never captured and is gone. That is the
+> cost, paid once, and it is why the format exists rather than a preference.
 
 ### Also
 

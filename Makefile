@@ -144,7 +144,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check lint guard-check boots-distribution test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint guard-check boots-distribution flight-image-check test-wdt test-loop test-voter voter-one test-voter-campaign test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -168,6 +168,40 @@ $(BUILD)/%.o: %.S Makefile
 
 size: $(TARGET)
 	@$(SIZE) $(TARGET)
+
+# --- The image a campaign is allowed to measure --------------------------------
+#
+# **A campaign runs on the image that flies, or it proves nothing about it.**
+#
+# The harness substitutes sources constantly and harness/broken/ exists for that.
+# What must never happen is a *campaign* — a published result about how the
+# system behaves — measured through one. ADR 0012, decision 3.
+#
+# The cost is measured rather than supposed. The M6 downlink stall substitute
+# added five instructions to a five-instruction poll loop; the stalled dispatch
+# went from 2746 to 3949 against a 3000 budget, overran, climbed the ladder and
+# reset the machine. The instrument moved the system across the exact threshold
+# under test. A hundred thousand frames through an instrumented parser would be a
+# hundred thousand results about a parser nobody ships.
+#
+# **Pre-flight, not post-mortem.** Reading the map costs milliseconds; a campaign
+# costs minutes to hours, and a refusal that arrives afterwards has already spent
+# them. Same corollary as the report writer, which used to check its output path
+# after running.
+flight-image-check: $(TARGET)
+	@intruders=$$(grep -oE 'build/[^ )]*\.o' $(BUILD)/obc.map \
+	   | sort -u | grep -v '^build/flight/' || true); \
+	 if [ -n "$$intruders" ]; then \
+	   echo "REFUSED: this image is not the one that flies."; \
+	   echo; \
+	   echo "$$intruders" | sed 's/^/    /'; \
+	   echo; \
+	   echo "A campaign measured through a substituted source is a result about"; \
+	   echo "a binary nobody ships. Rebuild with 'make clean build' first."; \
+	   exit 1; \
+	 fi; \
+	 n=$$(grep -oE 'build/[^ )]*\.o' $(BUILD)/obc.map | sort -u | wc -l); \
+	 echo "image  : flight only, $$n objects linked"
 
 # --- Survival guard ---------------------------------------------------------
 #
@@ -740,6 +774,7 @@ CAMPAIGN_RUNS ?= 20
 # hour. Writes a dated report naming its seed: a result that cannot be replayed
 # is an anecdote.
 test-voter-campaign: $(TARGET)
+	@$(MAKE) --no-print-directory flight-image-check
 	@$(PY) harness/runner/campaign.py \
 	   --runs $(CAMPAIGN_RUNS) --seed $(CAMPAIGN_SEED) --elf $(TARGET)
 
@@ -1048,6 +1083,7 @@ measure:
 	@$(MAKE) --no-print-directory deps-check
 	@$(MAKE) --no-print-directory lint
 	@$(MAKE) --no-print-directory guard-check
+	@$(MAKE) --no-print-directory flight-image-check
 	@echo
 	@$(MAKE) --no-print-directory test
 
