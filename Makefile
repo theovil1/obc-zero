@@ -70,9 +70,11 @@ RUN_TIMEOUT_S := 10
 MTIME_SRC ?= flight/hal/mtime.c
 
 SRC_C := flight/core/main.c \
+         flight/core/fault.c \
          $(MTIME_SRC) \
          flight/hal/uart.c
-SRC_S := flight/boot/start.S
+SRC_S := flight/boot/start.S \
+         flight/boot/trap.S
 
 OBJ := $(SRC_C:%.c=$(BUILD)/%.o) $(SRC_S:%.S=$(BUILD)/%.o)
 DEP := $(OBJ:.o=.d)
@@ -106,7 +108,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run test test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -303,6 +305,87 @@ test-stability:
 	    EXTRA_CFLAGS='-DTICK_CHECK_READS=$(STABILITY_READS)u' \
 	    RUN_TIMEOUT_S=120 test
 	@$(MAKE) --no-print-directory clean >/dev/null
+
+# --- Trap handler and fault record --------------------------------------------
+#
+# Three scenarios, in increasing order of what they rule out. Faults are made by
+# moving the program counter to an unmapped address rather than by planting a
+# trap instruction: flash is read-only, and a build carrying a deliberate fault
+# would not be the binary under test.
+TRAP_MODES := 1 2 3
+
+test-trap: $(TARGET)
+	@echo "trap: fault injection through the gdbstub"
+	@for m in $(TRAP_MODES); do \
+	   printf "  mode %s " $$m; \
+	   $(MAKE) --no-print-directory FAULT_MODE=$$m trap-one || exit 1; \
+	 done
+	@echo "PASS"
+
+trap-one: $(TARGET)
+	@rm -f $(BUILD)/serial.log $(BUILD)/fault.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$fault_mode = $(FAULT_MODE)' \
+	   -x emu/fault.gdb > $(BUILD)/fault.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   [ "$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log 2>/dev/null)" -ge 2 ] && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'FAULT-INJECTED' $(BUILD)/fault.log \
+	   || { echo "FAIL: no fault was injected, so this proved nothing"; \
+	        cat $(BUILD)/fault.log; exit 1; }; \
+	 banners=$$(grep -c '=== OBC-Zero ===' $(BUILD)/serial.log); \
+	 test "$$banners" -eq 2 \
+	   || { echo "FAIL: $$banners banners, expected exactly 2 (a loop or a hang)"; exit 1; }; \
+	 line=$$(grep 'reset  :' $(BUILD)/serial.log | tail -1); \
+	 case "$(FAULT_MODE)" in \
+	   1|2) echo "$$line" | grep -qF 'trap mcause=0x00000001' \
+	          || { echo "FAIL: expected the original cause, got:$$line"; exit 1; };; \
+	   3)   echo "$$line" | grep -qF 'DOUBLE FAULT' \
+	          || { echo "FAIL: expected a double fault, got:$$line"; exit 1; };; \
+	 esac; \
+	 echo "ok -$${line#*reset  :}"
+
+# The validator must reject on either field alone. One test does not cover the
+# other: checking only the magic passes the wrong-checksum case, and vice versa.
+RECORD_MODES := 1 2 3
+
+test-record: $(TARGET)
+	@echo "record: magic and checksum rejected independently"
+	@for m in $(RECORD_MODES); do \
+	   printf "  mode %s " $$m; \
+	   $(MAKE) --no-print-directory RECORD_MODE=$$m record-one || exit 1; \
+	 done
+	@echo "PASS"
+
+record-one: $(TARGET)
+	@rm -f $(BUILD)/serial.log $(BUILD)/rec.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 timeout 30 $(GDB) $(TARGET) -batch -ex 'set $$record_mode = $(RECORD_MODE)' \
+	   -x emu/record.gdb > $(BUILD)/rec.log 2>&1; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   grep -q 'boot   :' $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'RECORD-PLANTED' $(BUILD)/rec.log \
+	   || { echo "FAIL: no record was planted, so this proved nothing"; \
+	        cat $(BUILD)/rec.log; exit 1; }; \
+	 line=$$(grep 'reset  :' $(BUILD)/serial.log | tail -1); \
+	 case "$(RECORD_MODE)" in \
+	   1) echo "$$line" | grep -qF 'RECORD CORRUPT' \
+	        || { echo "FAIL: a wrong checksum was accepted:$$line"; exit 1; };; \
+	   2) echo "$$line" | grep -qF 'none recorded' \
+	        || { echo "FAIL: a wrong magic was accepted:$$line"; exit 1; };; \
+	   3) echo "$$line" | grep -qF 'interrupt 11' \
+	        || { echo "FAIL: the interrupt bit was lost:$$line"; exit 1; };; \
+	 esac; \
+	 echo "ok -$${line#*reset  :}"
 
 # --- Poisoned-RAM boot --------------------------------------------------------
 #

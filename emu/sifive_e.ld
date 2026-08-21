@@ -90,6 +90,25 @@ SECTIONS
         __bss_end = .;
     } > RAM
 
+    /*
+     * Survives a warm reset: never zeroed, never copied into. The startup code
+     * skips this range deliberately, which is what makes the reset cause
+     * readable on the next boot.
+     *
+     * Placed between .bss and the stack rather than at the top of RAM: a stack
+     * overflow grows down into the guard region below __stack_bottom, not into
+     * the fault record, so the record survives the very failure it exists to
+     * report.
+     */
+    .noinit (NOLOAD) : ALIGN(4)
+    {
+        __noinit_start = .;
+        KEEP(*(.noinit))
+        KEEP(*(.noinit.*))
+        . = ALIGN(4);
+        __noinit_end = .;
+    } > RAM
+
     .stack (NOLOAD) : ALIGN(16)
     {
         __stack_bottom = .;

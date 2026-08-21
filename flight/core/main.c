@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 
+#include "core/fault.h"
 #include "core/status.h"
 #include "hal/mtime.h"
 #include "hal/uart.h"
@@ -267,10 +268,105 @@ static obc_status_t print_tick_check(void)
     return st;
 }
 
+/*
+ * Reports the reset cause left by the previous boot, then clears it.
+ *
+ * The cause is stored as a full 32-bit mcause and reported that way. Bit 31
+ * separates an interrupt from an exception, and code 3 means "breakpoint" as an
+ * exception and "machine software interrupt" as an interrupt — unrelated
+ * events. Reporting the code alone would make them the same line in a log, and
+ * that ambiguity would cost a night during the first real anomaly.
+ */
+static obc_status_t print_reset_cause(void)
+{
+    uint32_t reset_cause = OBC_RESET_UNKNOWN;
+    obc_status_t v = obc_fault_validate(&reset_cause);
+    obc_status_t w;
+
+    w = obc_uart_puts("reset  : ");
+    if (w != OBC_OK) {
+        return w;
+    }
+
+    if (v == OBC_ERR_INVALID) {
+        return obc_uart_puts("none recorded (cold boot or torn write)\r\n");
+    }
+    if (v == OBC_ERR_UNSTABLE) {
+        return obc_uart_puts("RECORD CORRUPT: magic valid, checksum wrong\r\n");
+    }
+    if (reset_cause == OBC_RESET_DOUBLE_FAULT) {
+        return obc_uart_puts("DOUBLE FAULT (no detail recorded, by design)\r\n");
+    }
+
+    w = obc_uart_puts("trap mcause=");
+    if (w == OBC_OK) {
+        w = obc_uart_put_hex32(obc_fault_record.cause);
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts(obc_mcause_is_interrupt(obc_fault_record.cause)
+                              ? " (interrupt " : " (exception ");
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_put_u32(obc_mcause_code(obc_fault_record.cause));
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts(") epc=");
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_put_hex32(obc_fault_record.epc);
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts(" tval=");
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_put_hex32(obc_fault_record.tval);
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts("\r\n");
+    }
+    return w;
+}
+
+/*
+ * The trap handler reaches the fault record only through mscratch. If that
+ * register is wrong, every fault from here on is written to the wrong address
+ * and the failure is silent. The startup code sets it four instructions in;
+ * this checks it rather than trusting the position of those instructions.
+ */
+static obc_status_t print_mscratch_invariant(void)
+{
+    uint32_t mscratch;
+    uint32_t expected = (uint32_t)(uintptr_t)&obc_fault_record;
+    obc_status_t w;
+
+    __asm__ volatile("csrr %0, mscratch" : "=r"(mscratch));
+
+    w = obc_uart_puts("mscratch: ");
+    if (w != OBC_OK) {
+        return w;
+    }
+    w = obc_uart_put_hex32(mscratch);
+    if (w != OBC_OK) {
+        return w;
+    }
+    if (mscratch == expected) {
+        return obc_uart_puts(" ok\r\n");
+    }
+    w = obc_uart_puts(" FAULT expected ");
+    if (w == OBC_OK) {
+        w = obc_uart_put_hex32(expected);
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts("\r\n");
+    }
+    return (w == OBC_OK) ? OBC_ERR_INVALID : w;
+}
+
 void obc_main(void)
 {
     obc_status_t st;
     obc_status_t tick_st;
+    obc_status_t inv_st;
 
     obc_uart_init();
 
@@ -309,6 +405,12 @@ void obc_main(void)
         st = print_stack_usage();
     }
 
+    inv_st = print_mscratch_invariant();
+    if (st == OBC_OK) {
+        st = print_reset_cause();
+    }
+    obc_fault_consume();
+
     tick_st = print_tick_check();
 
     /*
@@ -321,7 +423,7 @@ void obc_main(void)
      * hide the very fault the check just found. The sentinel therefore reports
      * the verdict rather than being withheld on failure.
      */
-    if (st == OBC_OK && tick_st == OBC_OK) {
+    if (st == OBC_OK && tick_st == OBC_OK && inv_st == OBC_OK) {
         (void)obc_uart_puts("boot   : ok\r\n");
     } else {
         (void)obc_uart_puts("boot   : FAULT\r\n");

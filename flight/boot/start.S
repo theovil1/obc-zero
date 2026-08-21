@@ -12,6 +12,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "core/fault.h"
+
     .section .init, "ax"
     .global _start
     .type _start, @function
@@ -25,8 +27,46 @@ _start:
 
     la      sp, __stack_top
 
-    /* Mask every interrupt source. M0 has no trap vector installed yet, so a
-     * trap taken here would jump to whatever mtvec happens to hold. */
+    /*
+     * mscratch and mtvec are established here, before anything that can fault.
+     *
+     * A trap taken before mscratch is loaded would find it holding whatever the
+     * reset value is — zero on this machine — and the handler would write the
+     * fault record to address 0. A trap taken before mtvec is installed jumps
+     * to mtvec's reset value, also zero. Both windows are closed by doing this
+     * first, ahead of the .data copy and the .bss clear, either of which could
+     * in principle fault on a corrupted image.
+     *
+     * The banner asserts that mscratch still holds this value, so the invariant
+     * is checked at run time rather than assumed from the position of these
+     * four instructions.
+     */
+    la      t0, obc_fault_record
+    csrw    mscratch, t0
+
+    /*
+     * Clear the re-entry flag explicitly, and note why this rather than putting
+     * it under the magic-and-checksum discipline that protects the cause.
+     *
+     * The flag answers "am I already inside the handler", which is a question
+     * about the current boot only. Cleared here, it means exactly that. Left
+     * persistent, it would instead mean "some previous boot died inside the
+     * handler" — a different and also useful fact, but not the one the handler
+     * needs at entry, and conflating them would make a double fault in one boot
+     * indistinguishable from a stale flag in the next.
+     *
+     * The clear must happen here because at cold boot this word holds whatever
+     * the RAM held. On real hardware that is noise, and a pattern that happens
+     * to be non-zero would make the first trap of the first boot report a
+     * double fault. QEMU zeroes RAM and would hide that entirely, which is why
+     * the poisoned-RAM run exists.
+     */
+    sw      zero, OBC_FR_IN_HANDLER(t0)
+
+    la      t0, obc_trap_entry
+    csrw    mtvec, t0
+
+    /* Mask every interrupt source. Exceptions still reach the handler. */
     csrw    mie, zero
     csrw    mip, zero
 

@@ -2,7 +2,7 @@
 # binutils 2.45.50.20251209
 .bss            4
 .data           0
-.init         134
-.rodata       372
+.init         162
+.rodata       620
 .stack       1024
-.text         940
+.text        1648
