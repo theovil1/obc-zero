@@ -39,10 +39,14 @@ break obc_sched_run
 continue
 delete
 
+# The copies of the item under test, taken from its descriptor rather than by
+# name. The descriptor is const and lives in flash, so this reads the same
+# addresses the voter will read — an injector that guessed at symbol names would
+# silently corrupt the wrong words the day a second item is registered.
 set $copies = (unsigned int *[3]){ \
-  (unsigned int *)&obc_critical_a, \
-  (unsigned int *)&obc_critical_b, \
-  (unsigned int *)&obc_critical_c }
+  (unsigned int *)obc_critical_mode.copies[0], \
+  (unsigned int *)obc_critical_mode.copies[1], \
+  (unsigned int *)obc_critical_mode.copies[2] }
 
 set $i = 0
 while $i < $critical_copies

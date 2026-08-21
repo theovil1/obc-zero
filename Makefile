@@ -172,6 +172,10 @@ SIZE_SECTIONS := \.init|\.text|\.rodata|\.data|\.bss|\.stack|\.critical[0-2]
 SIZE_REF      := docs/size-reference.txt
 SIZE_ACTUAL   := $(BUILD)/size-actual.txt
 
+# The reference carries a "# accepted <date> <reason>" line that the generated
+# file cannot have, so the comparison strips it. The reason is there to be read
+# by a person asking why a figure is what it is, not to be diffed.
+
 # The toolchain version is part of the reference. A compiler upgrade changes
 # code size for reasons that have nothing to do with this project, and without
 # this header the result is a drift failure with no explanation in it. With it,
@@ -190,7 +194,8 @@ size-check: $(SIZE_ACTUAL)
 	@test -f $(SIZE_REF) || { \
 	  echo "no size reference at $(SIZE_REF)."; \
 	  echo "Create it with 'make size-accept' and commit it."; exit 1; }
-	@if diff -u $(SIZE_REF) $(SIZE_ACTUAL) > $(BUILD)/size.diff 2>&1; then \
+	@grep -v '^# accepted ' $(SIZE_REF) > $(BUILD)/size-ref-figures.txt
+	@if diff -u $(BUILD)/size-ref-figures.txt $(SIZE_ACTUAL) > $(BUILD)/size.diff 2>&1; then \
 	  echo "size: matches $(SIZE_REF)"; \
 	else \
 	  echo "FAIL: a pinned figure drifted from $(SIZE_REF)"; \
@@ -202,12 +207,30 @@ size-check: $(SIZE_ACTUAL)
 	  exit 1; \
 	fi
 
+# Accepting a new reference requires a reason, and the reason is written into
+# the reference itself.
+#
+# The earlier version printed "say why in the commit message" and trusted that
+# to happen. It did not: the discard count went from 13 to 14 one milestone
+# after the rule was written, and the commit said nothing. A guard that detects
+# drift is half a control; one that refuses to move without an explanation is
+# the whole of it. Same shape as deps-check, which does not ask nicely whether
+# libgcc was linked in.
 size-accept: $(SIZE_ACTUAL)
-	@cp $(SIZE_ACTUAL) $(SIZE_REF)
+	@test -n "$(REASON)" || { \
+	  echo "REFUSED: no reason given."; \
+	  echo; \
+	  echo "This file is a register of claims. Moving a figure without saying"; \
+	  echo "why leaves the next reader with a number and no way to ask about it,"; \
+	  echo "and that is exactly how a count drifts from 13 to 14 unremarked."; \
+	  echo; \
+	  echo "  make size-accept REASON='the scrubber discards a status it cannot use'"; \
+	  exit 1; }
+	@{ head -n 3 $(SIZE_ACTUAL); \
+	   echo "# accepted $$(date +%Y-%m-%d) $(REASON)"; \
+	   tail -n +4 $(SIZE_ACTUAL); } > $(SIZE_REF)
 	@echo "size reference updated:"
 	@cat $(SIZE_REF)
-	@echo
-	@echo "This is a deliberate change. Say why in the commit message."
 
 # Interactive boot. Leave with Ctrl-A then X.
 run: $(TARGET)

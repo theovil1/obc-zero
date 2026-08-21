@@ -74,7 +74,42 @@ protecting the same state twice with the second mechanism adding nothing.
 The task table is immutable and lives in flash. A corrupted RAM word cannot
 reach it, which is why it was put there.
 
+## What the separation actually protects against
+
+The three copies sit in separate link sections, roughly 400 bytes apart, and
+320 of those bytes are a guard that exists for no other purpose. It is worth
+being precise about what that buys, because the obvious claim is wrong.
+
+**It protects against corruption that has address locality.** A buffer overrun,
+a stack that grows past its bound, a wild pointer at a small offset, a DMA
+descriptor pointing a few words off: all of these damage a contiguous span, and
+several hundred bytes of unrelated data between the copies is the mechanism that
+stops one span reaching two of them.
+
+**It does nothing against a single-event upset.** A radiation-induced bit flip
+does not walk addresses. It strikes a cell, and the logical distance between two
+addresses tells you nothing about whether that cell is near another.
+
+**Against a multi-cell upset it may help, and that cannot be checked here.**
+Multiple cells struck by one particle are *physically* adjacent, and whether
+physical adjacency corresponds to logical address distance depends on how the
+memory array is laid out — row and column interleaving, bank structure,
+scrambling. QEMU models none of it. A separation that looks generous in the
+linker map could place two copies in the same physical row on real silicon.
+
+**Phase 2 porting obligation.** The multi-cell case must be revisited against
+the actual FE310 memory organisation, and the guard resized or the copies
+relocated on the strength of that map rather than on the strength of the linker's
+addresses. Until then, this record claims address locality and nothing more.
+
 ## Consequences
+
+**The separation is a property of the regions, not of the variable.** Critical
+state is registered as an item whose three copies go into the same three
+sections, so the 320-byte guard is paid once and every later item rides on it at
+the marginal cost of its own copies. Built the other way — one variable
+triplicated with its own spacing — the ninth item would have exhausted the line
+on padding alone.
 
 **M4 uses a small fraction of its 3072-byte line, and the surplus returns to
 the reserve rather than being spent because it was allocated.** An allocation is

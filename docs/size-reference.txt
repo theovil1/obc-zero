@@ -1,12 +1,13 @@
 # gcc      14.2.0
 # binutils 2.45.50.20251209
 # ignores  14
+# accepted 2026-08-21 scrubber walks a registry, and its status is discarded at the call site
 .bss          408
 .critical0      8
 .critical1      8
 .critical2      8
 .data           4
 .init         158
-.rodata      1332
+.rodata      1368
 .stack       1024
-.text        3616
+.text        3568

@@ -31,7 +31,7 @@ static volatile uint32_t s_announced;
 int obc_mode_is_safe(void)
 {
     uint32_t value = OBC_MODE_SAFE;
-    obc_status_t st = obc_critical_get(&value);
+    obc_status_t st = obc_critical_get(&obc_critical_mode, &value);
 
     if (st != OBC_OK) {
         /* No majority. Fail safe: see the header for why the two guesses are
@@ -77,7 +77,7 @@ void obc_mode_enter_safe(uint32_t reason)
     }
     s_announced = 1u;
 
-    obc_critical_set(OBC_MODE_SAFE);
+    obc_critical_set(&obc_critical_mode, OBC_MODE_SAFE);
     obc_mode = OBC_MODE_SAFE;
     obc_safe_reason = reason;
 
@@ -101,7 +101,7 @@ void obc_mode_enter_safe(uint32_t reason)
 
 void obc_mode_restore(uint32_t previous_reset_cause)
 {
-    obc_critical_set(OBC_MODE_NOMINAL);
+    obc_critical_set(&obc_critical_mode, OBC_MODE_NOMINAL);
     obc_mode = OBC_MODE_NOMINAL;
     obc_safe_reason = OBC_SAFE_NONE;
     s_announced = 0u;

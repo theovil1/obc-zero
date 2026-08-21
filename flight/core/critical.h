@@ -37,32 +37,51 @@ typedef struct {
 } obc_critical_copy_t;
 
 /*
- * Seed for the per-copy checksum. Each copy uses a different one, so that a
- * corruption which writes the same pattern over two copies — a burst, a stuck
- * DMA, a wild pointer walking forward — cannot leave both self-consistent.
- * A single shared seed would make identical corruption look like agreement.
+ * Per-copy checksum seeds. Each copy uses a different one, so that a corruption
+ * writing the same pattern over two copies — a burst, a stuck DMA, a wild
+ * pointer walking forward — cannot leave both self-consistent. A single shared
+ * seed would make identical corruption look like agreement.
  */
-#define OBC_CRITICAL_SEED_A 0xA5A50001u
-#define OBC_CRITICAL_SEED_B 0x5A5A0002u
-#define OBC_CRITICAL_SEED_C 0xC3C30003u
+#define OBC_CRITICAL_SEED_0 0xA5A50001u
+#define OBC_CRITICAL_SEED_1 0x5A5A0002u
+#define OBC_CRITICAL_SEED_2 0xC3C30003u
 
 /*
- * The three copies, placed in separate link sections and therefore in separate
- * parts of RAM. See emu/sifive_e.ld: they are interleaved with .bss and .noinit
- * rather than padded apart, which buys the separation without spending memory
- * on the gap.
+ * One protected item: three copies of one value, one copy in each region.
+ *
+ * **Three regions, not three copies of a variable.** The distinction decides
+ * what the next critical state costs. The 320-byte guard buys separation
+ * between the *regions*, once; a second item places its three copies in the
+ * same three sections and rides on the separation already paid for, at a
+ * marginal cost of its own twenty-four bytes and nothing else.
+ *
+ * Had this been built as one variable in three places, every future item would
+ * have repaid the separation — 320 bytes each, against a 3072-byte line, which
+ * runs out at the ninth item.
+ *
+ * The descriptor is const and lives in flash, so a corrupted RAM word cannot
+ * redirect the voter at the copies it is meant to be checking.
  */
-extern obc_critical_copy_t obc_critical_a;
-extern obc_critical_copy_t obc_critical_b;
-extern obc_critical_copy_t obc_critical_c;
+typedef struct {
+    const char *name;
+    obc_critical_copy_t *const copies[OBC_CRITICAL_COPIES];
+    uint32_t seeds[OBC_CRITICAL_COPIES];
+} obc_critical_item_t;
+
+/* The registry, walked by the scrubber. Const, in flash, compile-time sized. */
+extern const obc_critical_item_t *const obc_critical_items[];
+extern const uint32_t obc_critical_item_count;
+
+/* The one item the criterion in ADR 0006 admits today: the operating mode. */
+extern const obc_critical_item_t obc_critical_mode;
 
 /* Repairs performed, and votes that could not be resolved. Both are reported:
  * a system that silently repaired a thousand times is not healthy. */
 extern volatile uint32_t obc_critical_repairs;
 extern volatile uint32_t obc_critical_unresolved;
 
-/* Writes all three copies and their checksums. */
-void obc_critical_set(uint32_t value);
+/* Writes all three copies of one item, and their checksums. */
+void obc_critical_set(const obc_critical_item_t *item, uint32_t value);
 
 /*
  * Reads through the voter.
@@ -74,12 +93,23 @@ void obc_critical_set(uint32_t value);
  * no right answer to return, and returning a wrong one would be worse than
  * saying so.
  */
-OBC_MUST_CHECK obc_status_t obc_critical_get(uint32_t *out);
+OBC_MUST_CHECK obc_status_t obc_critical_get(const obc_critical_item_t *item,
+                                             uint32_t *out);
 
 /*
- * Walks the copies and repairs a dissenting one without a caller needing the
- * value. Runs on a period from the task table, so a corruption that is never
- * read still gets found before a second one makes it unrecoverable.
+ * Walks every registered item and repairs a dissenting copy without a caller
+ * needing the value.
+ *
+ * **Today it is redundant, and that is worth stating rather than hiding.** The
+ * only registered item is the operating mode, which the dispatch loop reads
+ * several times per frame, so read-repair always reaches a corruption first —
+ * measured: `repairs` is already 1 by the time the scrubber is first called.
+ *
+ * It stops being redundant the moment a rarely-read item is registered, which
+ * M8's event-log state will be. A cold item corrupted once waits for its next
+ * read, possibly hours, and a second corruption in that window turns a
+ * recoverable vote into an unresolvable one. The scrubber exists to close that
+ * window, and can only be shown to do so once there is cold state to try it on.
  */
 OBC_MUST_CHECK obc_status_t obc_critical_scrub(void);
 

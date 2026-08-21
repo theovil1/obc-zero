@@ -71,8 +71,16 @@ words, which a wild pointer crosses without noticing. The guard brings both gaps
 to roughly 400.
 
 That is the one place in this system where RAM holding nothing is doing
-something: the distance is the mechanism, not padding. The remaining 2728 B of
-the line returns to the reserve.
+something: the distance is the mechanism, not padding. And it is paid **once** —
+the copies belong to three regions rather than to one variable, so a later
+critical item places its copies in the same sections and costs only its own
+24 bytes. The remaining 2728 B of the line returns to the reserve.
+
+The separation protects against corruption with address locality — overruns,
+runaway pointers, misaimed DMA. It does nothing against a single-event upset,
+which does not walk addresses, and its value against multi-cell upsets depends
+on a physical memory layout QEMU does not model. Recorded as a Phase 2 porting
+obligation in ADR 0006 rather than claimed here.
 
 **Event log, 4096 B.** The largest line overall. An event log that wraps too
 quickly cannot explain an anomaly after the fact, which defeats its purpose. If

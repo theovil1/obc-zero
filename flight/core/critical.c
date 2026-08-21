@@ -7,19 +7,32 @@
 
 #include "core/critical.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "core/status.h"
 
 /*
- * Separate sections, and therefore separate parts of RAM. The linker script
- * interleaves them with .bss and .noinit so the separation costs nothing: a
- * corruption that walks forward from one copy meets several hundred bytes of
- * unrelated data before it reaches the next.
+ * The three regions. Separate link sections, and therefore separate parts of
+ * RAM: emu/sifive_e.ld interleaves them with .bss and .noinit and pads the
+ * remaining gap, so the copies of any item sit several hundred bytes apart.
+ *
+ * New critical state adds its copies to these same three sections. The
+ * separation is a property of the regions and is paid for once.
  */
-obc_critical_copy_t obc_critical_a __attribute__((section(".critical0"), used));
-obc_critical_copy_t obc_critical_b __attribute__((section(".critical1"), used));
-obc_critical_copy_t obc_critical_c __attribute__((section(".critical2"), used));
+static obc_critical_copy_t mode_copy_0 __attribute__((section(".critical0"), used));
+static obc_critical_copy_t mode_copy_1 __attribute__((section(".critical1"), used));
+static obc_critical_copy_t mode_copy_2 __attribute__((section(".critical2"), used));
+
+const obc_critical_item_t obc_critical_mode = {
+    .name = "mode",
+    .copies = { &mode_copy_0, &mode_copy_1, &mode_copy_2 },
+    .seeds = { OBC_CRITICAL_SEED_0, OBC_CRITICAL_SEED_1, OBC_CRITICAL_SEED_2 },
+};
+
+const obc_critical_item_t *const obc_critical_items[] = { &obc_critical_mode };
+const uint32_t obc_critical_item_count =
+    (uint32_t)(sizeof(obc_critical_items) / sizeof(obc_critical_items[0]));
 
 volatile uint32_t obc_critical_repairs;
 volatile uint32_t obc_critical_unresolved;
@@ -28,39 +41,36 @@ static uint32_t checksum_of(uint32_t value, uint32_t seed)
 {
     /*
      * Not a CRC. This detects a corrupted word, which is the threat; it makes
-     * no claim about burst patterns chosen to defeat it, and there is no
-     * adversary here to choose one.
+     * no claim about patterns chosen to defeat it, and there is no adversary
+     * here to choose one.
      */
     return (value ^ seed) + (value << 7) + (value >> 3);
 }
 
-static uint32_t seed_of(const obc_critical_copy_t *copy)
+static int copy_is_intact(const obc_critical_item_t *item, uint32_t index)
 {
-    if (copy == &obc_critical_a) {
-        return OBC_CRITICAL_SEED_A;
+    const obc_critical_copy_t *copy = item->copies[index];
+
+    return copy->checksum == checksum_of(copy->value, item->seeds[index]);
+}
+
+static void write_copy(const obc_critical_item_t *item, uint32_t index,
+                       uint32_t value)
+{
+    item->copies[index]->value = value;
+    item->copies[index]->checksum = checksum_of(value, item->seeds[index]);
+}
+
+void obc_critical_set(const obc_critical_item_t *item, uint32_t value)
+{
+    uint32_t i;
+
+    if (item == NULL) {
+        return;
     }
-    if (copy == &obc_critical_b) {
-        return OBC_CRITICAL_SEED_B;
+    for (i = 0u; i < OBC_CRITICAL_COPIES; i++) {
+        write_copy(item, i, value);
     }
-    return OBC_CRITICAL_SEED_C;
-}
-
-static int copy_is_intact(const obc_critical_copy_t *copy)
-{
-    return copy->checksum == checksum_of(copy->value, seed_of(copy));
-}
-
-static void write_copy(obc_critical_copy_t *copy, uint32_t value)
-{
-    copy->value = value;
-    copy->checksum = checksum_of(value, seed_of(copy));
-}
-
-void obc_critical_set(uint32_t value)
-{
-    write_copy(&obc_critical_a, value);
-    write_copy(&obc_critical_b, value);
-    write_copy(&obc_critical_c, value);
 }
 
 /*
@@ -69,20 +79,18 @@ void obc_critical_set(uint32_t value)
  * Two filters in order, and the order matters. A copy that fails its own
  * checksum is excluded before any comparison, because a corrupted copy that
  * happens to match another corrupted copy would otherwise form a majority of
- * two and win. Only then do the survivors vote.
+ * two and win against the one surviving good copy. Only then do the survivors
+ * vote.
  */
-static obc_status_t vote(uint32_t *out, int repair)
+static obc_status_t vote(const obc_critical_item_t *item, uint32_t *out)
 {
-    obc_critical_copy_t *copies[OBC_CRITICAL_COPIES] = {
-        &obc_critical_a, &obc_critical_b, &obc_critical_c
-    };
     uint32_t i;
     uint32_t j;
 
     for (i = 0u; i < OBC_CRITICAL_COPIES; i++) {
         uint32_t agreeing;
 
-        if (!copy_is_intact(copies[i])) {
+        if (!copy_is_intact(item, i)) {
             continue;
         }
 
@@ -91,23 +99,23 @@ static obc_status_t vote(uint32_t *out, int repair)
             if (j == i) {
                 continue;
             }
-            if (copy_is_intact(copies[j]) && copies[j]->value == copies[i]->value) {
+            if (copy_is_intact(item, j)
+                && item->copies[j]->value == item->copies[i]->value) {
                 agreeing++;
             }
         }
 
         if (agreeing >= 2u) {
-            uint32_t winner = copies[i]->value;
+            uint32_t winner = item->copies[i]->value;
 
-            if (repair) {
-                for (j = 0u; j < OBC_CRITICAL_COPIES; j++) {
-                    if (!copy_is_intact(copies[j]) || copies[j]->value != winner) {
-                        write_copy(copies[j], winner);
-                        obc_critical_repairs++;
-                    }
+            for (j = 0u; j < OBC_CRITICAL_COPIES; j++) {
+                if (!copy_is_intact(item, j)
+                    || item->copies[j]->value != winner) {
+                    write_copy(item, j, winner);
+                    obc_critical_repairs++;
                 }
             }
-            if (out != 0) {
+            if (out != NULL) {
                 *out = winner;
             }
             return OBC_OK;
@@ -123,21 +131,29 @@ static obc_status_t vote(uint32_t *out, int repair)
     return OBC_ERR_UNSTABLE;
 }
 
-obc_status_t obc_critical_get(uint32_t *out)
+obc_status_t obc_critical_get(const obc_critical_item_t *item, uint32_t *out)
 {
-    if (out == 0) {
+    if (item == NULL || out == NULL) {
         return OBC_ERR_INVALID;
     }
-    return vote(out, 1);
+    return vote(item, out);
 }
 
 obc_status_t obc_critical_scrub(void)
 {
+    obc_status_t worst = OBC_OK;
+    uint32_t i;
+
     /*
-     * The same vote, without a caller wanting the value. State that is written
-     * once and read rarely would otherwise accumulate corruptions until a
-     * second one made the first unrecoverable, and the scrubber exists to find
-     * the first while a majority still survives it.
+     * Every registered item, not only the one a caller happens to want. Bounded
+     * by the registry, which is a compile-time constant in flash.
      */
-    return vote(0, 1);
+    for (i = 0u; i < obc_critical_item_count; i++) {
+        obc_status_t st = vote(obc_critical_items[i], NULL);
+
+        if (st != OBC_OK) {
+            worst = st;
+        }
+    }
+    return worst;
 }
