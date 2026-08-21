@@ -5,6 +5,129 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M3: the error model, and a safe mode that had to be defined twice
+
+**Measured commit:** `d2559fccad822d1b86e8cbd427f7d0c0cae1b5a9`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+**Branch:** `feat/m3-error-model`
+
+### The warning count was the scope signal, and it held
+
+`OBC_MUST_CHECK` on the seven existing fallible functions produced **nine
+warnings, all in `main.c`**, all at sites that discarded a status deliberately.
+Nine in one file is what a milestone that stayed inside its perimeter looks
+like; thirty across the tree would have meant the error model had been rolled
+out ahead of itself.
+
+A `(void)` cast does not silence `warn_unused_result` under GCC, which turns out
+to be better than the alternative: every discard must be written as one.
+`OBC_IGNORE` makes each deliberate abandonment greppable, so `grep -c OBC_IGNORE`
+is the count of places where the system knowingly stops caring — nine — and that
+is a number one can read.
+
+### Safe mode could not be defined the way the plan defined it
+
+The plan asked for "the minimum set of tasks that keeps the system contactable".
+Being contactable requires an uplink. There is none: command ingest is M7,
+telemetry framing is M6, and the only channel is a transmit-only UART.
+
+Writing the definition against those subsystems would have meant guessing their
+shape and constraining M6 and M7 from a position of ignorance — and rewriting
+the record twice as they arrived. So ADR 0005 defines safe mode against what
+exists: **only tasks marked essential are dispatched.**
+
+Essentiality is an explicit field, never inferred from the period. A period says
+how often a task runs; it says nothing about whether the system can do without
+it. Deriving one from the other would make safe mode change silently whenever a
+cadence was adjusted, which is the kind of coupling that is invisible until it
+matters.
+
+A static assertion requires at least one essential task. A safe mode that
+dispatches nothing is a halt wearing a different name, and over a transmit-only
+line it is indistinguishable from a hang.
+
+### Three entry points, and the one that was only two-thirds wired
+
+| Entry | Mechanism | Result |
+|---|---|---|
+| Trap handler | records, resets, next boot degrades | 16 dispatches, housekeeping only |
+| Executive | frame overrun, direct | 19 dispatches: 4 before entry, 15 after |
+| Clock | `mtime` will not settle, direct | executive returns, degraded first |
+
+The counts are the assertion. Nineteen is four dispatches in the frame that
+overran plus fifteen frames of the essential subset — derived, not observed.
+
+**The clock entry was wired on one of the executive's three `obc_mtime_read`
+call sites.** The injected failure landed on another, inside the idle wait, and
+the executive returned an error without ever degrading. "Reachable from three
+subsystems" is not satisfied by an entry point that works only if the failure is
+polite about where it happens.
+
+Found by testing the path, not by reading the code. Every read now goes through
+one helper, which is the shape that makes the omission impossible rather than
+merely fixed.
+
+### A broken test that passed while proving nothing
+
+The unstable-clock variant was set to fail after 200000 reads. A full run
+performs **166817**. The threshold was above the whole run, so the clock never
+failed, the system never degraded, and the test reported success.
+
+That is the third time this project has produced a green run on an injection
+that did not happen, and each time the cause was different: a debugger script
+that errored, an injection aimed at the wrong read, and now a threshold beyond
+the reach of the run. The pattern is not carelessness in one place — it is that
+**an injector is a program too**, and nothing was checking that this one did its
+job. The rule already written into M9 covers it; what this adds is that a
+threshold is as much a part of the injection as the code around it, and it must
+be measured rather than estimated.
+
+Measured: 166817 reads over 16 frames, about 10400 per frame, roughly 6000
+consumed by the boot checks. Set to 100000, landing near frame 9.
+
+### The checker derives the degraded expectation
+
+From the entry frame onward, the expected sequence is the essential subset, and
+the counts come from that same sequence rather than from a separate formula.
+
+Exempting degraded runs from the conformance check would have been the easy
+option and the wrong one: a run that degrades is exactly when a scheduler is
+most likely to be wrong, so skipping the assertion there leaves the interesting
+case unchecked.
+
+### The broken copies went stale, and said so
+
+Adding the `essential` field broke both `harness/broken/` variants at compile
+time. That is the intended behaviour of a copy and the reason their headers say
+they are one. They are regenerated from the flight sources with the defect
+reapplied, rather than patched.
+
+### Measurement
+
+`make measure` on `d2559fc`:
+
+```
+   text    data     bss     dec     hex filename
+   4642       4    1468    6114    17e2 build/obc.elf
+
+size: matches docs/size-reference.txt
+deps: no compiler or library helpers linked in
+All checks passed!
+```
+
+RAM 1472 B of 16384 B. The mode record is 12 B in `.noinit`, with its own magic
+and checksum: the fault record is consumed at every boot, so a field inside it
+could not answer "did a previous boot go degraded".
+
+First appearance of a non-empty `.data` — 4 bytes, `obc_safe_entry_frame`
+initialised to its sentinel — which incidentally exercises the flash-to-RAM copy
+that `start.S` has been performing since M0 with nothing to copy.
+
+Twelve targets green, including `lint`, which now fails rather than skips when
+ruff is absent.
+
+---
+
 ## 2026-08-20 — M2: the executive, and the property that had to come first
 
 **Measured commit:** `4df8c5d43f306053e4b0bd8e3ee240913e1ae052`
