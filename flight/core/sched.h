@@ -65,6 +65,16 @@ typedef struct {
     obc_task_fn fn;
     uint32_t period_frames; /* dispatch every N frames; 1 means every frame */
     uint32_t budget_instr;  /* retired instructions allowed per dispatch */
+    /*
+     * Whether the system still dispatches this task once degraded.
+     *
+     * An explicit field, never inferred from the period. A period says how
+     * often a task runs; it says nothing about whether the system can do
+     * without it, and deriving one from the other would make safe mode change
+     * silently whenever a cadence was adjusted. See
+     * docs/adr/0005-safe-mode.md.
+     */
+    uint32_t essential;
 } obc_task_t;
 
 /*
@@ -127,6 +137,15 @@ extern volatile uint32_t obc_slack_ticks_min;  /* worst slack seen */
 extern volatile uint32_t obc_window_start_ticks;
 extern volatile uint32_t obc_window_end_ticks;
 
+/*
+ * The frame at which the executive went degraded, or OBC_SAFE_ENTRY_NONE if it
+ * did not. The host needs this to know which part of the trace to hold to the
+ * full table and which part to hold to the essential subset only: without it, a
+ * degraded run is indistinguishable from a scheduler that dropped dispatches.
+ */
+#define OBC_SAFE_ENTRY_NONE 0xFFFFFFFFu
+extern volatile uint32_t obc_safe_entry_frame;
+
 /* The table, defined in flight/core/tasks.c. */
 extern const obc_task_t obc_task_table[];
 extern const uint32_t obc_task_count;
@@ -139,6 +158,6 @@ extern const uint32_t obc_task_count;
  * runs. M3 supplies the endless outer loop once there is a recovery policy to
  * put around it.
  */
-obc_status_t obc_sched_run(uint32_t frames);
+OBC_MUST_CHECK obc_status_t obc_sched_run(uint32_t frames);
 
 #endif /* OBC_SCHED_H */

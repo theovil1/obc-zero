@@ -39,7 +39,7 @@
  *
  * *out is left untouched on failure.
  */
-obc_status_t obc_mtime_read(uint64_t *out);
+OBC_MUST_CHECK obc_status_t obc_mtime_read(uint64_t *out);
 
 /* Number of times obc_mtime_read exhausted its retry budget since reset.
  * Non-zero means the timer misbehaved and the system should say so. */

@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "core/fault.h"
+#include "core/mode.h"
 #include "core/sched.h"
 #include "core/status.h"
 #include "hal/mtime.h"
@@ -164,7 +165,7 @@ static obc_status_t print_timebase_check(void)
         return w;
     }
     if (st != OBC_OK) {
-        (void)obc_uart_puts("FAULT unmeasurable\r\n");
+        OBC_IGNORE(obc_uart_puts("FAULT unmeasurable\r\n"));
         return st;
     }
     w = obc_uart_put_u32(milli);
@@ -186,11 +187,11 @@ static obc_status_t print_timebase_check(void)
          * timer alone would send the next person hunting a regression that
          * does not exist.
          */
-        (void)obc_uart_puts(" FAULT out of tolerance\r\n");
-        (void)obc_uart_puts("         either -icount shift is not 6 "
-                            "(the usual cause, and deliberate)\r\n");
-        (void)obc_uart_puts("         or the machine timer is not 32768 Hz "
-                            "(a real regression)\r\n");
+        OBC_IGNORE(obc_uart_puts(" FAULT out of tolerance\r\n"));
+        OBC_IGNORE(obc_uart_puts("         either -icount shift is not 6 "
+                            "(the usual cause, and deliberate)\r\n"));
+        OBC_IGNORE(obc_uart_puts("         or the machine timer is not 32768 Hz "
+                            "(a real regression)\r\n"));
         return OBC_ERR_INVALID;
     }
     return obc_uart_puts(" ok\r\n");
@@ -495,12 +496,12 @@ static obc_status_t print_sched_summary(obc_status_t run_status)
     uint32_t i;
     obc_status_t w;
 
-    w = obc_uart_puts("sched  : ");
+    w = obc_uart_puts(obc_mode_is_safe() ? "sched  : SAFE " : "sched  : ");
     if (w != OBC_OK) {
         return w;
     }
     if (run_status != OBC_OK) {
-        (void)obc_uart_puts("FAULT executive returned an error\r\n");
+        OBC_IGNORE(obc_uart_puts("FAULT executive returned an error\r\n"));
         return run_status;
     }
 
@@ -565,11 +566,11 @@ static obc_status_t print_sched_summary(obc_status_t run_status)
      * buffer holds, so the ordering assertion would be comparing a truncated
      * sequence. That is a failed test, not a warning. */
     if (obc_trace_overflow != 0u) {
-        (void)obc_uart_puts("  TRACE OVERFLOW, the window is larger than the buffer\r\n");
+        OBC_IGNORE(obc_uart_puts("  TRACE OVERFLOW, the window is larger than the buffer\r\n"));
         return OBC_ERR_INVALID;
     }
     if (obc_frame_overruns != 0u) {
-        (void)obc_uart_puts("  FRAME OVERRUN\r\n");
+        OBC_IGNORE(obc_uart_puts("  FRAME OVERRUN\r\n"));
         return OBC_ERR_UNSTABLE;
     }
     return OBC_OK;
@@ -622,6 +623,17 @@ void obc_main(void)
     if (st == OBC_OK) {
         st = print_reset_cause();
     }
+    /*
+     * Entry point 1 of 3: a fault on the previous boot. The handler reset
+     * rather than running policy, so the decision is taken here — and it must
+     * be taken before the record is consumed, since consuming it destroys the
+     * evidence.
+     */
+    {
+        uint32_t previous = OBC_RESET_UNKNOWN;
+        OBC_IGNORE(obc_fault_validate(&previous));
+        obc_mode_restore(previous);
+    }
     obc_fault_consume();
 
     tick_st = print_tick_check();
@@ -650,9 +662,9 @@ void obc_main(void)
      * the verdict rather than being withheld on failure.
      */
     if (st == OBC_OK && tick_st == OBC_OK && inv_st == OBC_OK) {
-        (void)obc_uart_puts("boot   : ok\r\n");
+        OBC_IGNORE(obc_uart_puts("boot   : ok\r\n"));
     } else {
-        (void)obc_uart_puts("boot   : FAULT\r\n");
+        OBC_IGNORE(obc_uart_puts("boot   : FAULT\r\n"));
     }
 
     /*

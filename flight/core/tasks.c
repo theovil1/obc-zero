@@ -34,6 +34,17 @@
 #define T2_PERIOD 4u
 #define T3_PERIOD 8u
 
+/*
+ * Essentiality. Only housekeeping survives a degraded mode, because its
+ * continued dispatch is the only evidence the executive is still running. M6
+ * and M7 will re-examine this set once telemetry has a frame and commands have
+ * an ingest path; that re-examination is a change to ADR 0005, not a surprise.
+ */
+#define T0_ESSENTIAL 1u
+#define T1_ESSENTIAL 0u
+#define T2_ESSENTIAL 0u
+#define T3_ESSENTIAL 0u
+
 #define T0_BUDGET 1000u
 #define T1_BUDGET 1500u
 #define T2_BUDGET 3000u
@@ -73,10 +84,10 @@ static void task_audit(void)
 }
 
 const obc_task_t obc_task_table[] = {
-    { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET },
-    { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET },
-    { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET },
-    { "audit",        task_audit,        T3_PERIOD, T3_BUDGET },
+    { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET, T0_ESSENTIAL },
+    { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET, T1_ESSENTIAL },
+    { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET, T2_ESSENTIAL },
+    { "audit",        task_audit,        T3_PERIOD, T3_BUDGET, T3_ESSENTIAL },
 };
 
 const uint32_t obc_task_count =
@@ -114,6 +125,14 @@ _Static_assert((OBC_ASSERT_WINDOW_FRAMES / T0_PERIOD)
                        + (OBC_ASSERT_WINDOW_FRAMES / T3_PERIOD)
                    <= OBC_TRACE_CAPACITY,
                "the assertion window produces more dispatches than the trace holds");
+
+/*
+ * At least one task must survive a degraded mode. A safe mode that dispatches
+ * nothing is a stopped system wearing a different name, and over a
+ * transmit-only serial line it is indistinguishable from a hang.
+ */
+_Static_assert(T0_ESSENTIAL + T1_ESSENTIAL + T2_ESSENTIAL + T3_ESSENTIAL >= 1u,
+               "safe mode would dispatch nothing, which is a halt not a mode");
 
 /* Every period must divide the window exactly, or the expected count is not an
  * integer and the conformance assertion would need a tolerance. */

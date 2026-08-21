@@ -16,16 +16,16 @@ void obc_uart_init(void);
 
 /* Writes one byte. Returns OBC_ERR_TIMEOUT if the transmit FIFO stayed full
  * for longer than the bounded retry limit; the byte is then dropped. */
-obc_status_t obc_uart_putc(char c);
+OBC_MUST_CHECK obc_status_t obc_uart_putc(char c);
 
 /* Writes a NUL-terminated string. Stops and returns the first error.
  * Returns OBC_ERR_INVALID if s is NULL. */
-obc_status_t obc_uart_puts(const char *s);
+OBC_MUST_CHECK obc_status_t obc_uart_puts(const char *s);
 
 /* Writes v as unsigned decimal, no padding. */
-obc_status_t obc_uart_put_u32(uint32_t v);
+OBC_MUST_CHECK obc_status_t obc_uart_put_u32(uint32_t v);
 
 /* Writes v as eight uppercase hex digits, prefixed with "0x". */
-obc_status_t obc_uart_put_hex32(uint32_t v);
+OBC_MUST_CHECK obc_status_t obc_uart_put_hex32(uint32_t v);
 
 #endif /* OBC_HAL_UART_H */

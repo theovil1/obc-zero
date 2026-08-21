@@ -79,6 +79,7 @@ SCHED_SRC ?= flight/core/sched.c
 TASKS_SRC ?= flight/core/tasks.c
 
 SRC_C := flight/core/main.c \
+         flight/core/mode.c \
          $(SCHED_SRC) \
          $(TASKS_SRC) \
          flight/core/fault.c \

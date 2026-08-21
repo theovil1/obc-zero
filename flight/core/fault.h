@@ -118,7 +118,7 @@ static inline uint32_t obc_mcause_code(uint32_t mcause)
  * *out_reset_cause receives OBC_RESET_DOUBLE_FAULT for a double-fault record;
  * no other field of such a record is meaningful and none is returned.
  */
-obc_status_t obc_fault_validate(uint32_t *out_reset_cause);
+OBC_MUST_CHECK obc_status_t obc_fault_validate(uint32_t *out_reset_cause);
 
 /*
  * Records `cause` and resets through the AON watchdog. Does not return.

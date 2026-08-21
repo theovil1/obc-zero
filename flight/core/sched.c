@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 
+#include "core/mode.h"
 #include "core/status.h"
 #include "hal/mtime.h"
 
@@ -23,6 +24,7 @@ volatile uint32_t obc_frame_overruns;
 volatile uint32_t obc_slack_ticks_min;
 volatile uint32_t obc_window_start_ticks;
 volatile uint32_t obc_window_end_ticks;
+volatile uint32_t obc_safe_entry_frame = OBC_SAFE_ENTRY_NONE;
 
 static inline uint32_t read_minstret(void)
 {
@@ -103,6 +105,11 @@ obc_status_t obc_sched_run(uint32_t frames)
 
     obc_slack_ticks_min = OBC_FRAME_TICKS;
     obc_window_start_ticks = (uint32_t)frame_start;
+    if (obc_mode_is_safe() && obc_safe_entry_frame == OBC_SAFE_ENTRY_NONE) {
+        /* Already degraded on entry, restored from the previous boot. Frame 0
+         * so the host holds the whole window to the essential subset. */
+        obc_safe_entry_frame = 0u;
+    }
 
     for (frame = 0u; frame < frames; frame++) {
         uint64_t deadline = frame_start + OBC_FRAME_TICKS;
@@ -119,6 +126,12 @@ obc_status_t obc_sched_run(uint32_t frames)
             if (obc_task_table[i].period_frames == 0u) {
                 continue;
             }
+            /* Degraded: only the essential subset is dispatched. The cadence is
+             * unchanged — a degraded system that also moved its timebase would
+             * be two failures to reason about instead of one. */
+            if (obc_mode_is_safe() && obc_task_table[i].essential == 0u) {
+                continue;
+            }
             if ((frame % obc_task_table[i].period_frames) == 0u) {
                 dispatch(i);
             }
@@ -128,11 +141,25 @@ obc_status_t obc_sched_run(uint32_t frames)
          * frame with no slack is a frame about to overrun. */
         st = obc_mtime_read(&now);
         if (st != OBC_OK) {
+            /* Entry point 3 of 3: the clock. A timer that will not settle is a
+             * machine fault, and continuing to schedule against it would mean
+             * trusting deadlines derived from a value the reader rejected. */
+            if (st == OBC_ERR_UNSTABLE) {
+                obc_safe_entry_frame = frame;
+                obc_mode_enter_safe(OBC_SAFE_CLOCK);
+            }
             return st;
         }
         if (now >= deadline) {
             obc_frame_overruns++;
             obc_slack_ticks_min = 0u;
+            /* Entry point 2 of 3: the executive itself. Direct, with no reset —
+             * nothing is wrong with the machine, only with what it was asked to
+             * do. */
+            if (!obc_mode_is_safe()) {
+                obc_safe_entry_frame = frame;
+                obc_mode_enter_safe(OBC_SAFE_FRAME_OVERRUN);
+            }
         } else {
             uint32_t slack = (uint32_t)(deadline - now);
             if (slack < obc_slack_ticks_min) {
