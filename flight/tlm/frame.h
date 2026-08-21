@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 
+#include "cmd/frame.h"
 #include "core/sched.h"
 #include "core/status.h"
 
@@ -138,8 +139,42 @@ typedef struct {
 #define OBC_TLM_N_SENSOR 2u
 #define OBC_TLM_O_SENSOR (OBC_TLM_O_SENSOR_FLAGS + OBC_TLM_W_SENSOR_FLAGS)
 
+/*
+ * The command path's counters.
+ *
+ * Published because ADR 0013 obligation 2 is checked from the ground, and the
+ * only way the ground sees a flight counter is a frame. That the coverage
+ * evidence rides on telemetry rather than on instrumentation is what lets a fuzz
+ * campaign run on the image that flies — ADR 0012 decision 3 would otherwise
+ * have forbidden measuring it at all.
+ *
+ * One field per rejection reason, a set fixed at compile time. **Nothing the
+ * outside sends changes how many fields a frame has**, per ADR 0012 decision 1;
+ * a frame whose shape an input could influence is one the ground decodes against
+ * a layout the vehicle chose under someone else's direction.
+ */
+#define OBC_TLM_W_CMD_EXAMINED 4u
+#define OBC_TLM_O_CMD_EXAMINED (OBC_TLM_O_SENSOR + (OBC_TLM_W_SENSOR * OBC_TLM_N_SENSOR))
+
+#define OBC_TLM_W_CMD_ACCEPTED 4u
+#define OBC_TLM_O_CMD_ACCEPTED (OBC_TLM_O_CMD_EXAMINED + OBC_TLM_W_CMD_EXAMINED)
+
+#define OBC_TLM_W_CMD_REJECTED 4u
+#define OBC_TLM_N_CMD_REJECTED OBC_CMD_REJECT_COUNT
+#define OBC_TLM_O_CMD_REJECTED (OBC_TLM_O_CMD_ACCEPTED + OBC_TLM_W_CMD_ACCEPTED)
+
+#define OBC_TLM_W_CMD_EXECUTED 2u
+#define OBC_TLM_O_CMD_EXECUTED \
+    (OBC_TLM_O_CMD_REJECTED + (OBC_TLM_W_CMD_REJECTED * OBC_TLM_N_CMD_REJECTED))
+
+#define OBC_TLM_W_CMD_QUEUED 1u
+#define OBC_TLM_O_CMD_QUEUED (OBC_TLM_O_CMD_EXECUTED + OBC_TLM_W_CMD_EXECUTED)
+
+#define OBC_TLM_W_CMD_LATE 1u
+#define OBC_TLM_O_CMD_LATE (OBC_TLM_O_CMD_QUEUED + OBC_TLM_W_CMD_QUEUED)
+
 #define OBC_TLM_W_SUM 2u
-#define OBC_TLM_O_SUM (OBC_TLM_O_SENSOR + (OBC_TLM_W_SENSOR * OBC_TLM_N_SENSOR))
+#define OBC_TLM_O_SUM (OBC_TLM_O_CMD_LATE + OBC_TLM_W_CMD_LATE)
 
 #define OBC_TLM_FRAME_LEN (OBC_TLM_O_SUM + OBC_TLM_W_SUM)
 

@@ -39,6 +39,9 @@ volatile uint32_t obc_frames_run;
 volatile uint32_t obc_frame_overruns;
 volatile uint32_t obc_slack_ticks_min;
 volatile uint32_t obc_window_start_ticks;
+volatile uint32_t obc_cmd_now_ticks;
+__attribute__((used, retain)) const uint32_t obc_sched_window_frames =
+    OBC_SCHED_WINDOW_FRAMES;
 volatile uint32_t obc_window_end_ticks;
 volatile uint32_t obc_safe_entry_frame = OBC_SAFE_ENTRY_NONE;
 
@@ -149,6 +152,7 @@ obc_status_t obc_sched_run(uint32_t frames)
     }
 
     for (frame = 0u; frame < frames; frame++) {
+        obc_cmd_now_ticks = (uint32_t)frame_start;
         uint64_t deadline = frame_start + OBC_FRAME_TICKS;
         uint64_t now;
         uint32_t i;

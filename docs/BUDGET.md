@@ -22,7 +22,7 @@ to the reserve, but exceeding a line requires changing this file and saying why.
 | Panic context and safe-mode state | M3 | 256 | 1.6 % | Planned |
 | Triple-redundant critical state | M4 | 3072 | 18.8 % | **In use**, 344 B measured |
 | Telemetry frames and sensor mocks | M6 | 2048 | 12.5 % | **In use**, 112 B measured |
-| Command queue | M7 | 2048 | 12.5 % | Planned |
+| Command queue | M7 | 2048 | 12.5 % | **In use**, 224 B measured |
 | Event log buffer | M8 | 4096 | 25.0 % | Planned |
 | **Unallocated reserve** | — | **3328** | **20.3 %** | Held |
 | **Total** | | **16384** | 100 % | |

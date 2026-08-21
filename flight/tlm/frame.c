@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#include "cmd/frame.h"
+#include "cmd/queue.h"
 #include "core/critical.h"
 #include "core/fault.h"
 #include "core/mode.h"
@@ -76,6 +78,18 @@ OBC_TLM_KEEP const obc_tlm_field_t obc_tlm_fields[] = {
       OBC_TLM_KIND_BITS, { 0, 0, 0 } },
     { "sensor", OBC_TLM_O_SENSOR, OBC_TLM_W_SENSOR, OBC_TLM_N_SENSOR,
       OBC_TLM_KIND_SENSOR, { 0, 0, 0 } },
+    { "cmd_examined", OBC_TLM_O_CMD_EXAMINED, OBC_TLM_W_CMD_EXAMINED, 1u,
+      OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
+    { "cmd_accepted", OBC_TLM_O_CMD_ACCEPTED, OBC_TLM_W_CMD_ACCEPTED, 1u,
+      OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
+    { "cmd_rejected", OBC_TLM_O_CMD_REJECTED, OBC_TLM_W_CMD_REJECTED,
+      OBC_TLM_N_CMD_REJECTED, OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
+    { "cmd_executed", OBC_TLM_O_CMD_EXECUTED, OBC_TLM_W_CMD_EXECUTED, 1u,
+      OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
+    { "cmd_queued", OBC_TLM_O_CMD_QUEUED, OBC_TLM_W_CMD_QUEUED, 1u,
+      OBC_TLM_KIND_COUNT, { 0, 0, 0 } },
+    { "cmd_late", OBC_TLM_O_CMD_LATE, OBC_TLM_W_CMD_LATE, 1u, OBC_TLM_KIND_COUNT,
+      { 0, 0, 0 } },
     { "sum", OBC_TLM_O_SUM, OBC_TLM_W_SUM, 1u, OBC_TLM_KIND_SUM, { 0, 0, 0 } },
 };
 
@@ -286,6 +300,23 @@ obc_status_t obc_tlm_emit(void)
     for (i = 0u; i < OBC_TLM_N_SENSOR; i++) {
         put_u16(OBC_TLM_O_SENSOR + (i * OBC_TLM_W_SENSOR), obc_sensor_value[i]);
     }
+
+    /*
+     * Full words, not saturated to sixteen bits like the others. These are the
+     * arithmetic the ground checks ADR 0013's identity with — examined equals
+     * accepted plus the sum of rejected — and an identity between saturated
+     * numbers stops holding at the ceiling, which for a 100 000-frame campaign
+     * is where it would be needed.
+     */
+    put_u32(OBC_TLM_O_CMD_EXAMINED, obc_cmd_examined);
+    put_u32(OBC_TLM_O_CMD_ACCEPTED, obc_cmd_accepted);
+    for (i = 0u; i < OBC_TLM_N_CMD_REJECTED; i++) {
+        put_u32(OBC_TLM_O_CMD_REJECTED + (i * OBC_TLM_W_CMD_REJECTED),
+                obc_cmd_rejected[i]);
+    }
+    put_u16(OBC_TLM_O_CMD_EXECUTED, sat16(obc_cmd_executed));
+    put_u8(OBC_TLM_O_CMD_QUEUED, sat8(obc_cmd_queued));
+    put_u8(OBC_TLM_O_CMD_LATE, sat8(obc_cmd_late));
 
     put_u16(OBC_TLM_O_SUM, frame_sum());
 

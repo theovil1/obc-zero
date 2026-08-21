@@ -21,6 +21,8 @@
 #include "core/recover.h"
 #include "core/sched.h"
 #include "core/status.h"
+#include "cmd/frame.h"
+#include "cmd/queue.h"
 #include "hal/uart.h"
 #include "tlm/frame.h"
 #include "tlm/sensor.h"
@@ -39,6 +41,7 @@
 #define T1_PERIOD 2u
 #define T2_PERIOD 4u
 #define T3_PERIOD 8u
+#define T4_PERIOD 1u
 
 /*
  * Essentiality. Re-examined at M6, as ADR 0005 said it would be, and the answer
@@ -53,7 +56,16 @@
 #define T0_ESSENTIAL 1u
 #define T1_ESSENTIAL 1u
 #define T2_ESSENTIAL 0u
+/*
+ * Commanding is essential, and for a sharper reason than telemetry's.
+ *
+ * A degraded system that cannot be commanded cannot be recovered by anyone. Safe
+ * mode does not exit on its own — ADR 0005 — so the ground is the only way out,
+ * and suspending the path the ground arrives on would make the degradation
+ * permanent by construction.
+ */
 #define T3_ESSENTIAL 0u
+#define T4_ESSENTIAL 1u
 
 /*
  * Budgets, in retired instructions.
@@ -78,17 +90,32 @@
  * that drains it across frames. ADR 0009, decision 4.
  */
 #define T0_BUDGET 1000u
-#define T1_BUDGET 3000u
+#define T1_BUDGET 4500u
 
 /*
  * The telemetry task's nominal cost — a dispatch in which the downlink never
- * refuses — measured on this build and re-measured by every `make measure`
- * through the max the executive reports. Named so the assertion below can reason
- * about it instead of repeating a literal.
+ * refuses — measured on this build.
+ *
+ * **A measured constant goes stale in silence.** This was 1466 for a 47-byte
+ * frame; M7 added the command counters, the frame became 91 bytes, the real cost
+ * became 2585, and the compile-time assertion below went on passing against the
+ * old number. The check was real, it succeeded, and it guarded nothing — because
+ * its input was a measurement nobody re-took.
+ *
+ * So it is exported as a symbol and `make test` compares it against what the
+ * executive actually reports. A constant that encodes a measurement is only a
+ * control while something re-measures it.
  */
-#define T1_NOMINAL_INSTR 1466u
+#define T1_NOMINAL_INSTR 2585u
 #define T2_BUDGET 3000u
 #define T3_BUDGET 5000u
+
+/*
+ * Ingest. Measured, like T1, and with the same caveat: it is what taking
+ * OBC_CMD_RX_BYTES from an emulated port costs, and an emulated port has no baud
+ * rate. See docs/EMULATION-GAP.md entry 2.
+ */
+#define T4_BUDGET 12000u
 
 /* Deterministic work. volatile so the compiler cannot delete the loop, which
  * would make every budget meaningless while every test still passed. */
@@ -148,6 +175,23 @@ static void task_scrub(void)
     OBC_IGNORE(obc_critical_scrub());
 }
 
+/*
+ * Ingest and dispatch commands.
+ *
+ * The two halves are one task on purpose: a frame accepted this dispatch and run
+ * next dispatch would make the time-tag accurate to two frames rather than one,
+ * and the M7 criterion is one.
+ *
+ * The clock is read through the executive's own degrading reader, not here — a
+ * second call site for mtime is exactly the shape of the M3 defect where safe
+ * mode's clock entry was wired to one of three reads.
+ */
+static void task_command(void)
+{
+    obc_cmd_poll();
+    obc_cmd_queue_run(obc_cmd_now_ticks, obc_frames_run);
+}
+
 static void task_audit(void)
 {
     work(400u);
@@ -159,12 +203,18 @@ static void task_audit(void)
  * own. Those tasks escalate from rung 1 straight to rung 3, because a rung that
  * calls nothing is worse than a rung that is absent.
  */
+/* Exported so the nominal test can hold the declared figure against the observed
+ * one. See the comment on T1_NOMINAL_INSTR. */
+__attribute__((used, retain)) const uint32_t obc_tlm_nominal_instr = T1_NOMINAL_INSTR;
+
 const obc_task_t obc_task_table[] = {
     { "housekeeping", task_housekeeping, T0_PERIOD, T0_BUDGET, T0_ESSENTIAL, 0 },
     { "telemetry",    task_telemetry,    T1_PERIOD, T1_BUDGET, T1_ESSENTIAL,
       obc_tlm_subsystem_reset },
     { "scrub",        task_scrub,        T2_PERIOD, T2_BUDGET, T2_ESSENTIAL, 0 },
     { "audit",        task_audit,        T3_PERIOD, T3_BUDGET, T3_ESSENTIAL, 0 },
+    { "command",      task_command,      T4_PERIOD, T4_BUDGET, T4_ESSENTIAL,
+      obc_cmd_queue_init },
 };
 
 
@@ -178,7 +228,8 @@ _Static_assert(sizeof(obc_task_table) / sizeof(obc_task_table[0]) <= OBC_MAX_TAS
 
 /* A zero period would mean "never", expressed as a division by zero waiting to
  * happen. If a task should not run, remove it from the table. */
-_Static_assert(T0_PERIOD > 0u && T1_PERIOD > 0u && T2_PERIOD > 0u && T3_PERIOD > 0u,
+_Static_assert(T0_PERIOD > 0u && T1_PERIOD > 0u && T2_PERIOD > 0u && T3_PERIOD > 0u
+                   && T4_PERIOD > 0u,
                "a task period of zero is not a way to disable a task");
 
 /*
@@ -186,7 +237,7 @@ _Static_assert(T0_PERIOD > 0u && T1_PERIOD > 0u && T2_PERIOD > 0u && T3_PERIOD >
  * are powers of two it happens whenever the frame index is a multiple of the
  * largest period. Every budget must fit in a single frame simultaneously.
  */
-_Static_assert(T0_BUDGET + T1_BUDGET + T2_BUDGET + T3_BUDGET
+_Static_assert(T0_BUDGET + T1_BUDGET + T2_BUDGET + T3_BUDGET + T4_BUDGET
                    <= OBC_FRAME_INSTR_CAPACITY,
                "the declared budgets cannot all fit in one frame");
 
@@ -201,6 +252,7 @@ _Static_assert((OBC_ASSERT_WINDOW_FRAMES / T0_PERIOD)
                        + (OBC_ASSERT_WINDOW_FRAMES / T1_PERIOD)
                        + (OBC_ASSERT_WINDOW_FRAMES / T2_PERIOD)
                        + (OBC_ASSERT_WINDOW_FRAMES / T3_PERIOD)
+                       + (OBC_ASSERT_WINDOW_FRAMES / T4_PERIOD)
                    <= OBC_TRACE_CAPACITY,
                "the assertion window produces more dispatches than the trace holds");
 
@@ -209,7 +261,8 @@ _Static_assert((OBC_ASSERT_WINDOW_FRAMES / T0_PERIOD)
  * nothing is a stopped system wearing a different name, and over a
  * transmit-only serial line it is indistinguishable from a hang.
  */
-_Static_assert(T0_ESSENTIAL + T1_ESSENTIAL + T2_ESSENTIAL + T3_ESSENTIAL >= 1u,
+_Static_assert(T0_ESSENTIAL + T1_ESSENTIAL + T2_ESSENTIAL + T3_ESSENTIAL
+                   + T4_ESSENTIAL >= 1u,
                "safe mode would dispatch nothing, which is a halt not a mode");
 
 /*
@@ -219,7 +272,8 @@ _Static_assert(T0_ESSENTIAL + T1_ESSENTIAL + T2_ESSENTIAL + T3_ESSENTIAL >= 1u,
  */
 _Static_assert(T0_PERIOD <= OBC_HEALTHY_FRAMES && T1_PERIOD <= OBC_HEALTHY_FRAMES
                    && T2_PERIOD <= OBC_HEALTHY_FRAMES
-                   && T3_PERIOD <= OBC_HEALTHY_FRAMES,
+                   && T3_PERIOD <= OBC_HEALTHY_FRAMES
+                   && T4_PERIOD <= OBC_HEALTHY_FRAMES,
                "a boot would be called healthy before every task had run once");
 
 /*
@@ -254,5 +308,6 @@ _Static_assert(T1_NOMINAL_INSTR < T1_BUDGET,
 _Static_assert((OBC_ASSERT_WINDOW_FRAMES % T0_PERIOD) == 0u
                    && (OBC_ASSERT_WINDOW_FRAMES % T1_PERIOD) == 0u
                    && (OBC_ASSERT_WINDOW_FRAMES % T2_PERIOD) == 0u
-                   && (OBC_ASSERT_WINDOW_FRAMES % T3_PERIOD) == 0u,
+                   && (OBC_ASSERT_WINDOW_FRAMES % T3_PERIOD) == 0u
+                   && (OBC_ASSERT_WINDOW_FRAMES % T4_PERIOD) == 0u,
                "a period that does not divide the window would need a tolerance");

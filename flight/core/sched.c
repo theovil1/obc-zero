@@ -24,6 +24,13 @@ volatile uint32_t obc_frames_run;
 volatile uint32_t obc_frame_overruns;
 volatile uint32_t obc_slack_ticks_min;
 volatile uint32_t obc_window_start_ticks;
+volatile uint32_t obc_cmd_now_ticks;
+
+/* The assertion window as a symbol, so the host can compute what the table
+ * implies rather than restating it. Retained: nothing in flight reads it, and
+ * --gc-sections is right to drop what only the ground wants. */
+__attribute__((used, retain)) const uint32_t obc_sched_window_frames =
+    OBC_SCHED_WINDOW_FRAMES;
 volatile uint32_t obc_window_end_ticks;
 volatile uint32_t obc_safe_entry_frame = OBC_SAFE_ENTRY_NONE;
 
@@ -187,6 +194,10 @@ static obc_status_t run_window(uint32_t frames)
 
     for (frame = 0u; frame < frames; frame++) {
         uint64_t deadline = frame_start + OBC_FRAME_TICKS;
+
+        /* Published before any dispatch, so every task that needs the time uses
+         * the frame's reading rather than taking one of its own. */
+        obc_cmd_now_ticks = (uint32_t)frame_start;
         uint64_t now;
         uint32_t i;
         uint32_t guard;

@@ -1,13 +1,13 @@
 # gcc      14.2.0
 # binutils 2.45.50.20251209
-# ignores  19
-# accepted 2026-08-21 ADR 0009: the downlink retry allowance becomes one budget for the whole frame, derived from the task budget and asserted at build time; +1 discard for the console announcement of a shed frame, which has no caller to return to
-.bss          592
+# ignores  24
+# accepted 2026-08-21 M7 command ingest: frame parser, closed reason set, time-tagged queue and the uplink receiver; +5 discards, three for the once-per-reason console announcement and two in the poll path whose outcome is already in the counters
+.bss          816
 .critical0      8
 .critical1      8
 .critical2      8
 .data          16
 .init         154
-.rodata      2148
+.rodata      2732
 .stack       1024
-.text        5872
+.text        7440

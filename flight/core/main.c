@@ -18,6 +18,7 @@
 #include "core/status.h"
 #include "hal/mtime.h"
 #include "hal/uart.h"
+#include "cmd/frame.h"
 #include "tlm/frame.h"
 
 /*
@@ -695,6 +696,29 @@ void obc_main(void)
             st = obc_uart_puts("tlm    : layout ok, frame ");
             if (st == OBC_OK) {
                 st = obc_uart_put_u32(obc_tlm_frame_len);
+            }
+            if (st == OBC_OK) {
+                st = obc_uart_puts(" bytes\r\n");
+            }
+        }
+    }
+
+    /*
+     * The command table's build properties, checked before the executive can
+     * dispatch ingest once. A table that fails this must not be used to execute
+     * anything — and unlike the telemetry layout audit, failing it does not
+     * degrade the system: refusing to ingest is enough, and ADR 0011 keeps the
+     * command path out of the recovery path in both directions.
+     */
+    {
+        obc_status_t cmd_st = obc_cmd_init();
+
+        if (st == OBC_OK) {
+            st = obc_uart_puts(cmd_st == OBC_OK
+                                   ? "cmd    : table ok, frame "
+                                   : "cmd    : TABLE AUDIT FAILED, not ingesting, frame ");
+            if (st == OBC_OK) {
+                st = obc_uart_put_u32(obc_cmd_frame_len);
             }
             if (st == OBC_OK) {
                 st = obc_uart_puts(" bytes\r\n");

@@ -82,6 +82,13 @@ SCHED_SRC ?= flight/core/sched.c
 # hold a stall for longer than a single retired instruction.
 UART_SRC ?= flight/hal/uart.c
 
+# The command sources. M7's ingest path, its table and its queue, each selectable
+# so a broken variant replaces exactly the thing under test.
+CMD_FRAME_SRC ?= flight/cmd/frame.c
+CMD_TABLE_SRC ?= flight/cmd/table.c
+CMD_QUEUE_SRC ?= flight/cmd/queue.c
+CMD_SRC := $(CMD_FRAME_SRC) $(CMD_TABLE_SRC) $(CMD_QUEUE_SRC)
+
 TLM_FRAME_SRC ?= flight/tlm/frame.c
 TLM_SENSOR_SRC ?= flight/tlm/sensor.c
 TLM_SRC := $(TLM_FRAME_SRC) $(TLM_SENSOR_SRC)
@@ -99,6 +106,15 @@ CONSOLE_LOG = $(BUILD)/serial.log
 DOWNLINK_BIN = $(BUILD)/tlm.bin
 PORTS = -serial file:$(CONSOLE_LOG) -serial file:$(DOWNLINK_BIN)
 
+# The ground link as a socket, for the milestone that needs it in both
+# directions. `wait=on` is not optional: with `wait=off` QEMU discards everything
+# the vehicle writes before a client connects, and the banner and the first
+# telemetry frames are written in the first instants. Measured, after a run that
+# reported zero downlink bytes for that reason alone.
+LINK_PORT ?= 14500
+LINK_PORTS = -chardev socket,id=link,host=127.0.0.1,port=$(LINK_PORT),server=on,wait=on \
+             -serial file:$(CONSOLE_LOG) -serial chardev:link
+
 SRC_C := flight/core/main.c \
          flight/core/critical.c \
          flight/core/mode.c \
@@ -108,6 +124,7 @@ SRC_C := flight/core/main.c \
          flight/core/fault.c \
          $(MTIME_SRC) \
          $(TLM_SRC) \
+         $(CMD_SRC) \
          $(UART_SRC)
 SRC_S := flight/boot/start.S \
          flight/boot/trap.S
@@ -418,6 +435,21 @@ test: $(TARGET)
 	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
 	 cat $(BUILD)/serial.log; \
 	 test $$found -eq 1 || { echo "FAIL: sentinel not seen within $(RUN_TIMEOUT_S)s"; exit 1; }; \
+	 declared=$$($(GDB) $(TARGET) -batch -nx -ex 'set architecture riscv:rv32' \
+	    -ex 'print obc_tlm_nominal_instr' 2>/dev/null \
+	    | sed -n 's/^\$$1 = //p'); \
+	 observed=$$(sed -n 's/.*task telemetry .*max=\([0-9]*\)\/.*/\1/p' \
+	    $(BUILD)/serial.log); \
+	 if [ "$$declared" != "$$observed" ]; then \
+	   echo "FAIL: the telemetry task cost $$observed instructions; the build"; \
+	   echo "      asserts its budget against $$declared."; \
+	   echo "A measured constant that nobody re-measures is a control whose input"; \
+	   echo "went stale — the assertion still passes and guards nothing. This is"; \
+	   echo "exactly how a 47-byte frame's figure survived into a 91-byte one."; \
+	   echo "Re-measure, update T1_NOMINAL_INSTR, and check the budget still fits."; \
+	   exit 1; \
+	 fi; \
+	 echo "nominal: telemetry $$observed instructions, as the build asserts"; \
 	 grep -qF "build  : $(BUILD_HASH)" $(BUILD)/serial.log \
 	   || { echo "FAIL: build hash mismatch"; exit 1; }; \
 	 echo "PASS"
@@ -742,8 +774,13 @@ voter-one: $(TARGET)
 	     || { echo "FAIL: a single corruption should still leave a majority ($$state)"; exit 1; }; \
 	   echo "$$state" | grep -qF 'mode=0' \
 	     || { echo "FAIL: a repaired corruption changed behaviour ($$state)"; exit 1; }; \
-	   grep -qF '30 dispatches' $(BUILD)/serial.log \
-	     || { echo "FAIL: a repaired corruption changed the dispatch count"; exit 1; }; \
+	   expected=$$($(GDB) $(TARGET) -batch -nx \
+	      -x harness/runner/dispatch_count.gdb 2>/dev/null \
+	      | sed -n 's/^DISPATCHES //p'); \
+	   grep -qF "$$expected dispatches" $(BUILD)/serial.log \
+	     || { echo "FAIL: a repaired corruption changed the dispatch count"; \
+	          echo "      (expected $$expected, from the task table in the binary)"; \
+	          grep 'sched  :' $(BUILD)/serial.log; exit 1; }; \
 	 else \
 	   echo "$$state" | grep -qE 'failed_votes=[1-9]' \
 	     || { echo "FAIL: two corrupted copies still produced a verdict ($$state)"; exit 1; }; \
@@ -1379,3 +1416,42 @@ test-uart-stall:
 	    --no-overrun --expect-drops --nominal-cost $(BUILD)/stall-nominal.txt
 	@$(MAKE) --no-print-directory clean >/dev/null
 	@echo "PASS"
+
+# --- M7: commanding -------------------------------------------------------- #
+#
+# The uplink and the downlink are one socket, because they are one ground link.
+# The console stays on its own port, as ADR 0009 decided and for the reason it
+# gave: a console is a development artefact and a ground link is the system's
+# product.
+#
+# Every rejection reason is reached by a hand-written frame, not by fuzzing. A
+# random generator will not reliably produce a frame valid in every respect
+# except its arming, and the boundary values one past a limit are exactly what it
+# will miss. The fuzz campaign is the other half and neither replaces the other.
+test-cmd: $(TARGET)
+	@echo "cmd: every rejection reason, and the vehicle unmoved by all of them"
+	@for phase in parse sequence queue; do \
+	   printf "  %-9s " $$phase; \
+	   $(MAKE) --no-print-directory CMD_PHASE=$$phase cmd-one || exit 1; \
+	 done
+	@echo "PASS"
+
+CMD_PHASE ?= parse
+
+cmd-one: $(TARGET)
+	@rm -f $(CONSOLE_LOG) && touch $(CONSOLE_LOG)
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    $(LINK_PORTS) -kernel $(TARGET) & \
+	 qpid=$$!; \
+	 $(PY) harness/runner/cmd_check.py --elf $(TARGET) --phase $(CMD_PHASE) \
+	   --console $(CONSOLE_LOG) --port $(LINK_PORT) > $(BUILD)/cmd.txt 2>&1; \
+	 rc=$$?; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(CONSOLE_LOG) 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 cat $(BUILD)/cmd.txt; \
+	 exit $$rc
+	@# a run of malformed frames must not cost a boot; that is the whole point
+	$(call assert_boots,1,1,$(CONSOLE_LOG))

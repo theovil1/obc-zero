@@ -85,7 +85,7 @@ def telemetry_cost(console: Path) -> int:
     )
 
 
-def _flight_figures(elf: Path) -> tuple[int, int]:
+def _flight_figures(elf: Path) -> tuple[int, int, int, int]:
     """The allowance and the per-poll cost, read out of the binary under test.
 
     Never restated here. A prediction built from the harness's own copy of these
@@ -103,6 +103,10 @@ def _flight_figures(elf: Path) -> tuple[int, int]:
             "print obc_uart_tx_retry_total",
             "-ex",
             "print obc_uart_tx_poll_instr",
+            "-ex",
+            "print obc_uart_tx_byte_instr",
+            "-ex",
+            "print obc_tlm_frame_len",
             str(elf),
         ],
         capture_output=True,
@@ -114,12 +118,12 @@ def _flight_figures(elf: Path) -> tuple[int, int]:
         for line in out.splitlines()
         if line.startswith("$")
     ]
-    if len(values) != 2:
+    if len(values) != 4:
         raise CheckFailed(
-            "the binary does not carry its retry allowance and poll cost as "
-            "symbols, so the host would have to restate them"
+            "the binary does not carry its retry allowance, poll cost, byte cost "
+            "and frame length as symbols, so the host would have to restate them"
         )
-    return values[0], values[1]
+    return values[0], values[1], values[2], values[3]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -193,14 +197,19 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.nominal_cost:
             nominal = int(args.nominal_cost.read_text().strip())
-            allowance, poll = _flight_figures(args.elf)
-            floor = allowance * poll
+            allowance, poll, byte_cost, frame_len = _flight_figures(args.elf)
+            # A refused emission spends the allowance polling and saves the byte
+            # writes it never performs. Netting the two is what makes this a
+            # figure about the loop rather than about the frame length.
+            floor = allowance * poll - frame_len * byte_cost
             observed = cost - nominal
             if observed < floor:
                 raise CheckFailed(
                     f"a refused dispatch cost only {observed} instructions more than "
-                    f"an accepted one, against {floor} the allowance alone should "
-                    f"cost ({allowance} polls x {poll}): the retries are declared "
+                    f"an accepted one, against {floor} predicted "
+                    f"({allowance} polls x {poll}, less {frame_len} bytes x "
+                    f"{byte_cost} the refused path never writes): "
+                    "the retries are declared "
                     "and not spent, so the port is being given up on rather than "
                     "waited out"
                 )

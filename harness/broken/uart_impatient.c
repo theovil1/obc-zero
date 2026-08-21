@@ -84,7 +84,9 @@
 #define UART_DIV 0x18u
 
 #define UART_TXDATA_FULL 0x80000000u
+#define UART_RXDATA_EMPTY 0x80000000u
 #define UART_TXCTRL_TXEN 0x00000001u
+#define UART_RXCTRL_RXEN 0x00000001u
 
 /*
  * Bounded retry limit, now derived rather than chosen. See OBC_UART_TX_POLL_INSTR
@@ -181,6 +183,9 @@ __attribute__((used, retain)) const uint32_t obc_uart_tx_retry_total =
 __attribute__((used, retain)) const uint32_t obc_uart_tx_poll_instr =
     OBC_UART_TX_POLL_INSTR;
 
+__attribute__((used, retain)) const uint32_t obc_uart_tx_byte_instr =
+    OBC_UART_TX_BYTE_INSTR;
+
 void obc_uart_init(void)
 {
     /*
@@ -190,6 +195,29 @@ void obc_uart_init(void)
      */
     port_init(UART0_BASE);
     port_init(UART1_BASE);
+    /* The uplink's receiver, enabled here and nowhere else. A receiver brought
+     * up lazily on the first poll is one whose initialisation only runs in the
+     * cases where the link already works. */
+    reg_write(UART1_BASE, UART_RXCTRL, UART_RXCTRL_RXEN);
+}
+
+obc_status_t obc_uart_uplink_getc(uint8_t *out)
+{
+    uint32_t rx;
+
+    if (out == 0) {
+        return OBC_ERR_INVALID;
+    }
+
+    /* One read, no retry, no wait. The empty bit and the data share a register:
+     * reading it consumes a byte when one is there, so this must not be read
+     * twice. */
+    rx = reg_read(UART1_BASE, UART_RXDATA);
+    if ((rx & UART_RXDATA_EMPTY) != 0u) {
+        return OBC_ERR_TIMEOUT;
+    }
+    *out = (uint8_t)(rx & 0xFFu);
+    return OBC_OK;
 }
 
 obc_status_t obc_uart_putc(char c)

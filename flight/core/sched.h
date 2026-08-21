@@ -154,6 +154,16 @@ extern volatile uint32_t obc_window_end_ticks;
  * full table and which part to hold to the essential subset only: without it, a
  * degraded run is indistinguishable from a scheduler that dropped dispatches.
  */
+/*
+ * The clock reading taken at the top of the current frame.
+ *
+ * Published so the command task can time-tag against the same instant the
+ * executive used, rather than reading mtime itself. A second call site would be
+ * the shape of the M3 defect exactly: safe mode's clock entry wired to one of
+ * three reads, and the failure landing on another.
+ */
+extern volatile uint32_t obc_cmd_now_ticks;
+
 #define OBC_SAFE_ENTRY_NONE 0xFFFFFFFFu
 extern volatile uint32_t obc_safe_entry_frame;
 

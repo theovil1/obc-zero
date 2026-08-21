@@ -54,6 +54,21 @@
  */
 #define OBC_UART_TX_RETRY_TOTAL 256u
 
+/*
+ * What one *successful* byte costs, in retired instructions.
+ *
+ * Measured from the same disassembly as the poll cost: load the byte, read the
+ * status, branch, store, advance, loop. Needed because a refused emission does
+ * not pay it — it abandons after the first byte — so a comparison between a
+ * refused dispatch and an accepted one nets the polling against the writes that
+ * did not happen.
+ *
+ * The first version of that comparison ignored this and held while the frame was
+ * 47 bytes. M7 took the frame to 91, the savings grew past the margin, and the
+ * check failed naming the emitter for arithmetic that was the test's.
+ */
+#define OBC_UART_TX_BYTE_INSTR 7u
+
 /* Enables both transmitters. Must be called before any write. */
 void obc_uart_init(void);
 
@@ -90,5 +105,22 @@ OBC_MUST_CHECK obc_status_t obc_uart_put_hex32(uint32_t v);
  */
 OBC_MUST_CHECK obc_status_t obc_uart_downlink_write(const volatile uint8_t *bytes,
                                                     uint32_t len);
+
+/*
+ * Takes one byte from the uplink, if one is waiting.
+ *
+ * The uplink is the downlink's port. That is not economy: ADR 0009 separated the
+ * console from the ground link because they are different things, and a ground
+ * link is bidirectional. Commands arrive where telemetry leaves.
+ *
+ * **Never waits.** Returns OBC_ERR_TIMEOUT immediately when the receive FIFO is
+ * empty, so the caller polls rather than blocks. A blocking read here would put
+ * a wait of unbounded length inside a budgeted dispatch, which is the defect ADR
+ * 0009 spent a record removing from the transmit side; reintroducing it on the
+ * receive side would be the same mistake facing the other way.
+ *
+ * *out is left untouched when nothing is waiting.
+ */
+OBC_MUST_CHECK obc_status_t obc_uart_uplink_getc(uint8_t *out);
 
 #endif /* OBC_HAL_UART_H */
