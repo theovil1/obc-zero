@@ -5,6 +5,43 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — The discard count was raised silently, one milestone after the rule
+
+No measurement. A correction, recorded because the alternative is a rule that
+exists and is not followed.
+
+`68260fc` pinned the count of deliberate status discards and stated the rule
+plainly: *raising it is allowed and sometimes right, raising it silently is not.*
+
+`b42e1cb` raised it from 13 to 14 and said nothing. The mechanism did its job —
+the build refused until the reference was regenerated — and I regenerated it
+without writing the justification anywhere the rule asks for it.
+
+The discard is legitimate. `task_scrub` drops the status of `obc_critical_scrub`
+because an unresolved vote is already counted in `obc_critical_unresolved` and
+has already driven the system degraded through `obc_mode_is_safe`; the task has
+no caller to return anything to, and nothing it could add. That reasoning is in
+the code, at the call site, which is where a reader will look for it.
+
+It was not in the commit message, which is where the rule puts it. The
+difference matters: a comment explains a line to whoever is reading that line, a
+commit message explains a *change to a pinned figure* to whoever is auditing
+what moved and why. The pinned reference exists precisely so that someone can
+ask "why is this 14" and get an answer from the history rather than from a grep.
+
+Not fixed by rewriting `b42e1cb`. The commit is pushed and is cited by name in
+the entry that measures it, and rewriting history to tidy a lapse is worse than
+recording the lapse. Superseded here instead, on the same principle as the
+reports.
+
+What this says about the mechanism: pinning caught the drift, which is what it
+was for. It cannot make anyone explain themselves, and the honest reading of
+this is that the guard is half of the control and the discipline is the other
+half — the half that failed here, at the first opportunity, having been written
+by the same person who then failed it.
+
+---
+
 ## 2026-08-21 — M4 campaign: 1000 runs, and two counters that mean different things
 
 **Measured commit:** `976c9f0` (dirty at run time — the dashboard tooling was
