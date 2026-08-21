@@ -5,6 +5,147 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M1: the trap handler, and the defect its own test found
+
+**Measured commit:** `9e807dfdec5c739d94a2dc2d1b6de1bec5766b32`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+
+### The handler never touches the stack
+
+`mscratch` holds the fault record address; `sp` is never read or written. If the
+fault was a stack overflow or a corrupted `sp`, saving a context frame would
+fault again immediately, and the second trap overwrites `mepc` and `mcause` —
+destroying the original cause and leaving only the handler's own fault visible.
+
+Verified rather than argued. Fault injected with `sp = 0x40000000`, outside RAM:
+
+```
+reset  : trap mcause=0x00000001 (exception 1) epc=0x00000000 tval=0x00000000
+```
+
+The original cause, not a store fault of the handler's own making. The assertion
+is on the *cause*, not on the existence of a record — a handler that produced
+some record while losing the cause would pass the weaker test.
+
+### `mscratch` and `mtvec` are set four instructions in
+
+Before the `.data` copy and the `.bss` clear, either of which could fault on a
+corrupted image. A trap before `mscratch` is loaded would write the record to
+address zero; a trap before `mtvec` is installed would jump to address zero.
+Both windows are closed by ordering, and the banner asserts `mscratch` at run
+time rather than trusting where those instructions sit:
+
+```
+mscratch: 0x80000004 ok
+```
+
+### The double-fault test found a real defect on its first run
+
+This is the result worth keeping from this session.
+
+The classic idiom is `csrrw t0, mscratch, t0`, which leaves `mscratch` holding
+the interrupted `t0` and expects the handler to swap back before `mret`. This
+handler never returns — it resets — so `mscratch` stayed clobbered. A nested
+trap then swapped that garbage into `t0` and wrote the double-fault marker to an
+arbitrary address. The symptom was a second boot reporting no record at all
+where a double fault was expected.
+
+`mscratch` is now restored immediately and the interrupted `t0` parked in the
+record instead. Three extra instructions.
+
+The defect was invisible to both other trap tests, which never re-enter the
+handler. It existed only in the path that runs when everything else has already
+gone wrong — which is the path that matters most and the one least likely to be
+exercised by accident.
+
+### The re-entry flag: cleared, not persisted, and why
+
+The flag lives in `.noinit` beside the cause but is **cleared by the startup
+code** rather than protected by the magic-and-checksum discipline. The two do
+not prove the same thing, so the choice is recorded rather than left implicit.
+
+Cleared, the flag means "am I already inside the handler on this boot", which is
+the question the handler asks at entry. Persistent, it would mean "some previous
+boot died inside the handler" — also useful, but a different fact, and
+conflating them would make a genuine double fault indistinguishable from a stale
+flag carried across a reset.
+
+At cold boot the word holds whatever RAM held. On silicon that is noise, and a
+non-zero pattern would make the first trap of the first boot report a double
+fault. QEMU zeroes RAM and would hide this entirely, which is exactly why the
+poisoned-RAM run exists:
+
+```
+reset  : none recorded (cold boot or torn write)
+boot   : ok
+PASS (seed=1)
+```
+
+### Write order and the two rejections
+
+Payload, then checksum, then magic. The magic is the commit point: a reset
+landing mid-write leaves a record with no magic, which the reader rejects rather
+than half-believes. The reverse order would open a window in which a torn record
+reads back as authentic.
+
+Both rejections tested separately, because one does not cover the other — a
+validator checking only the magic passes the wrong-checksum case, and one
+checking only the checksum passes the wrong-magic case:
+
+| Planted record | Reported |
+|---|---|
+| magic valid, checksum wrong | `RECORD CORRUPT: magic valid, checksum wrong` |
+| checksum valid, magic wrong | `none recorded (cold boot or torn write)` |
+| both valid | `trap mcause=0x8000000B (interrupt 11) epc=0x20400123` |
+
+The third line carries a second result: `0x8000000B` is reported as **interrupt
+11**, not exception 11. `mcause` is stored and reported whole, so the two events
+that share code 11 stay distinguishable. A truncated field would make them one
+line in a log, and that ambiguity would cost a night during the first real
+anomaly.
+
+The checksum is a XOR of four words with a seed — a garbage detector, not an
+error-correcting code. It accepts random RAM with probability 2^-32 and offers
+nothing against a correlated corruption that preserves the XOR. Stated rather
+than papered over.
+
+### Three trap scenarios, in increasing order of what they rule out
+
+| Mode | Injection | Assertion |
+|---|---|---|
+| 1 | `pc = 0`, valid `sp` | cause recorded, exactly two banners |
+| 2 | `pc = 0`, `sp` outside RAM | the **original** cause, not the handler's |
+| 3 | `pc = 0` from inside the handler | double fault, distinct cause, one reset |
+
+Every mode asserts exactly two banners. Three or more would be a reset loop, and
+a loop that eventually settles would otherwise read as a pass.
+
+Faults are produced by moving the program counter to an unmapped address rather
+than by planting a trap instruction: flash is read-only here, and a build
+carrying a deliberate fault would not be the binary under test.
+
+### Measurement
+
+`make measure` on `9e807df`:
+
+```
+   text    data     bss     dec     hex filename
+   2430       0    1064    3494     da6 build/obc.elf
+```
+
+Flash 2430 B, up 984 B for the handler, the record and the reporting. RAM
+1064 B of 16384 B, up 36 B for the fault record in `.noinit`. Still 6.5 percent
+of RAM; `docs/BUDGET.md` is unaffected.
+
+### Still open in M1
+
+The timebase assertion at 32768 Hz, and the harness-side assertion of the reset
+cause. The latter's assertions exist and run, but they live in the Makefile
+rather than in `harness/`, which does not exist until M9 — left unticked because
+the criterion names the harness.
+
+---
+
 ## 2026-08-20 — shift=6, and the two properties the old criterion conflated
 
 **Measured commit:** `a8acc02b4bf127dd87a3739528bf07cd520346a8`
