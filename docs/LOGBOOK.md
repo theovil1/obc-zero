@@ -5,6 +5,73 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — Deux champs d'en-tête, et l'exigence qui rend M7 informatif
+
+Pas de code de vol. Un format de rapport et une décision.
+
+### Le hash du binaire n'est pas redondant avec celui du commit
+
+C'est la croyance qui empêche d'écrire ce champ. `docs/size-reference.txt` existe
+précisément parce qu'un même commit produit des images différentes selon la
+chaîne d'outils — c'est ce qu'il épingle et ce qu'il a déjà attrapé. Un rapport
+qui ne nomme que le commit nomme la source, pas ce qui a tourné.
+
+Vérifié avant de m'appuyer dessus : trois reconstructions propres du même arbre
+donnent le même hash. Un champ qui changerait à chaque compilation identifierait
+un artefact et rien d'autre.
+
+### Une version de format, pour une raison qui n'apparaît qu'après coup
+
+Si le champ arrive à M7, tous les rapports antérieurs ne l'ont pas, et il devient
+impossible de distinguer « rapport ancien, champ inexistant » de « rapport
+récent, champ omis ». Une ligne dans l'en-tête règle ça :
+
+| Version | Contenu |
+|---|---|
+| 1 | date, commit, provenance, base de mesure, graine, runs, échecs, durée |
+| 2 | ajoute le hash du binaire et ce champ |
+
+Ajouté maintenant plutôt qu'à M7, parce que le coût est le même et que le
+problème qu'il résout est créé par l'attente.
+
+### M7 : le premier jalon dont le succès est qu'il ne se passe rien
+
+Cent mille fois de suite. Et l'inversion que ça produit est le vrai sujet :
+**un fuzzer qui n'atteint jamais le parseur donne exactement le même résultat
+qu'un parseur parfait.** Une liaison montante déconnectée aussi. Un harnais qui
+émet sur le mauvais port aussi.
+
+Sans obligation de couverture, M7 serait le résultat le plus vert et le moins
+informatif du dépôt, et sa verdeur serait indiscernable de l'échec qu'elle est
+censée exclure.
+
+C'est la règle bidirectionnelle dans la forme que M7 lui donne. D'habitude
+l'effet oublié est celui du système ; ici **toute l'assertion est une absence**,
+donc l'effet à observer est celui de la campagne elle-même.
+
+Quatre obligations, et la deuxième est celle qui ne peut pas être satisfaite en
+ne faisant rien :
+
+```
+frames_examined == frames_accepted + Σ frames_rejected[raison]
+```
+
+Une trame examinée qui n'est dans aucune colonne a été jetée en silence — et le
+rejet silencieux est exactement ce à quoi ressemble une campagne qui passe.
+
+Détail qui a bien tourné sans que je l'aie prévu : les compteurs de rejet sont
+déjà du code de vol, puisque l'ADR 0011 les publie en télémétrie. Les lire, c'est
+lire une trame, pas instrumenter un binaire — donc l'ADR 0012 et la couverture ne
+se contredisent pas. Si le comptage avait été construit comme une facilité de
+test, M7 aurait dû choisir entre les deux.
+
+Et une limite nommée : atteindre une raison de rejet n'est pas couvrir les
+branches de son test. Un contrôle de plage avec un décalage d'une unité à sa
+borne haute est atteint, compté, et faux. Ça se ferme avec des cas écrits à la
+main aux frontières, à côté de la campagne et pas dedans.
+
+---
+
 ## 2026-08-21 — Trois frontières tranchées avant M7, et un contrôle d'image
 
 Pas de mesure du binaire : aucun code de vol n'a changé. Trois décisions et un

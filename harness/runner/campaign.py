@@ -23,6 +23,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import argparse
+import hashlib
 import random
 import re
 import socket
@@ -274,6 +275,39 @@ def render(tally: Tally, total: int, started: float, live: bool) -> str:
     return frame if live else frame + "\n"
 
 
+# The report format's own version.
+#
+# Version 1 reports carry no binary hash. That is a fact about when they were
+# written, not about the run that produced them, and without this field there is
+# no way to tell an old report from a recent one whose author left the field out.
+# One line, and it makes every future addition to this header safely detectable.
+#
+# 1 — date, commit, provenance, seed, runs, failures, wall clock
+# 2 — adds the binary hash and this field
+REPORT_FORMAT = 2
+
+
+def binary_hash(elf: Path) -> str:
+    """The SHA-256 of the image the campaign measured, first twelve hex digits.
+
+    **Not redundant with the commit hash**, which is the belief that keeps this
+    field from being written. `docs/size-reference.txt` exists precisely because
+    one commit produces different images on different toolchains — that is what
+    it pins and what it has caught. A report naming only the commit names the
+    source; it does not name the thing that ran.
+
+    Twelve digits rather than sixty-four: enough that a collision is not a
+    practical concern for a repository's worth of builds, short enough that the
+    header stays readable.
+
+    The build was checked to be byte-reproducible before this field was trusted —
+    three clean rebuilds of one tree, one hash. A field that changed on every
+    compilation would identify an artefact and nothing else, which is worth
+    knowing before writing it into a report that outlives the artefact.
+    """
+    return hashlib.sha256(elf.read_bytes()).hexdigest()[:12]
+
+
 def write_report(
     path: Path,
     tally: Tally,
@@ -281,6 +315,7 @@ def write_report(
     seed: int,
     elapsed: float,
     commit: str,
+    elf: Path | None = None,
     provenance: str = "measured",
     timing_basis: str = "emulated",
 ) -> None:
@@ -303,8 +338,13 @@ def write_report(
     lines = [
         f"# Voter campaign, {total} randomised corruptions",
         "",
+        f"- **Report format:** {REPORT_FORMAT}",
         f"- **Date:** {time.strftime('%Y-%m-%d')}",
         f"- **Commit:** `{commit}`",
+        (
+            f"- **Binary:** `{binary_hash(elf) if elf else 'unknown'}`"
+            " — the image measured, which one commit does not determine"
+        ),
         f"- **Provenance:** `{provenance}`",
         (
             f"- **Timing basis:** `{timing_basis}` — instruction and timing "
@@ -540,7 +580,7 @@ def main(argv: list[str]) -> int:
 
     elapsed = time.monotonic() - started
     report.parent.mkdir(parents=True, exist_ok=True)
-    write_report(report, tally, args.runs, args.seed, elapsed, commit)
+    write_report(report, tally, args.runs, args.seed, elapsed, commit, args.elf)
 
     print(f"\n  report written to {report}")
     if args.commit:
