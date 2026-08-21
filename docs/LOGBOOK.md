@@ -5,6 +5,70 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-21 — M7 mesuré sur `ad25f9f`, et deux contrôles périmés que la suite a trouvés
+
+| | Valeur |
+|---|---:|
+| `.bss` | 816 |
+| RAM totale | 2272 B sur 16384 |
+| Ligne M7 consommée | 224 B sur 2048 |
+| Trame de télémétrie | 91 octets |
+| Trame de commande | 20 octets |
+| `task telemetry`, nominal | 2585 sur 4500 |
+| `task command`, nominal | 112 sur 12000 |
+| Dispatchs par fenêtre | 46 |
+
+### Une constante mesurée devient fausse en silence
+
+L'assertion de compilation qui contient le budget télémétrie compare
+`T1_NOMINAL_INSTR` au budget. Cette constante valait 1466, mesurée sur une trame
+de 47 octets. M7 a ajouté les compteurs de commande, la trame est passée à 91
+octets, le coût réel à 2585 — **et l'assertion a continué de passer contre
+l'ancien chiffre.**
+
+Le contrôle était réel, il réussissait, et il ne gardait rien, parce que son
+entrée était une mesure que personne n'avait reprise. C'est le même défaut que la
+borne de 100 000 de l'ADR 0009, à ceci près qu'ici il se cache derrière un
+mécanisme qui a l'air de fonctionner.
+
+Corrigé structurellement : le chiffre est exporté comme symbole et `make test`
+le confronte à ce que l'exécutif rapporte. **Une constante qui encode une mesure
+n'est un contrôle que tant que quelque chose la remesure.**
+
+Et le compte de dispatchs du test du voteur était le littéral 30. Une tâche de
+plus l'a porté à 46, et l'assertion a échoué en nommant le voteur, qui n'y était
+pour rien. Dérivé de la table dans le binaire maintenant.
+
+### Le débit de la voie montante n'est pas le débit série
+
+Six à douze trames par run de seize frames, et la valeur dépend de la charge de
+la machine. Le facteur limitant est le FIFO de réception et la période de
+scrutation : le code de vol vide huit octets par dispatch, et QEMU ne remplit le
+FIFO qu'au tour suivant de sa boucle principale.
+
+Ce n'est pas un artefact d'émulation. Une station sol qui émet plus vite que le
+véhicule ne scrute ne fait pas passer ses commandes, ici comme ailleurs.
+
+Conséquence directe : **la file est à 4 et non à 8**, parce que 8 ne pouvait pas
+être montrée refusante. La remplir tombait exactement sur cette capacité, et le
+rejet pour file pleine se déclenchait ou non selon l'occupation de l'hôte. Une
+profondeur dont le refus n'est pas démontrable est une profondeur dont le refus
+est une affirmation.
+
+### Deux critères non cochés
+
+`obc_cmd_late` existe, est publié, et vaut zéro — et **rien n'asserte qu'une
+commande horodatée pour un tick donné s'est exécutée dans la frame qui le
+contient.** Un compteur à zéro est exactement ce que rapporterait un système qui
+ne vérifie jamais.
+
+Et la campagne de 100 000 trames n'a pas tourné. À six à douze trames par run,
+c'est de l'ordre de dix mille runs — une affaire de campagne comme M4, pas d'un
+test. Les obligations de couverture sont fixées par l'ADR 0013 et l'identité sur
+laquelle elles reposent est déjà assertée à chaque run.
+
+---
+
 ## 2026-08-21 — Deux champs d'en-tête, et l'exigence qui rend M7 informatif
 
 Pas de code de vol. Un format de rapport et une décision.
