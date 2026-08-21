@@ -88,6 +88,27 @@ static void dispatch(uint32_t index)
     }
 }
 
+/*
+ * Reads the clock, degrading if it will not settle.
+ *
+ * One place rather than three. The first version wired the clock entry point on
+ * a single one of the executive's three obc_mtime_read call sites, and the
+ * failure landed on one of the other two — so the executive returned an error
+ * without ever degrading. The property "reachable from three subsystems" is not
+ * satisfied by an entry point that only works if the failure is polite about
+ * where it happens.
+ */
+static obc_status_t sched_now(uint64_t *out, uint32_t frame)
+{
+    obc_status_t st = obc_mtime_read(out);
+
+    if (st == OBC_ERR_UNSTABLE && !obc_mode_is_safe()) {
+        obc_safe_entry_frame = frame;
+        obc_mode_enter_safe(OBC_SAFE_CLOCK);
+    }
+    return st;
+}
+
 obc_status_t obc_sched_run(uint32_t frames)
 {
     uint64_t frame_start;
@@ -98,7 +119,7 @@ obc_status_t obc_sched_run(uint32_t frames)
         return OBC_ERR_INVALID;
     }
 
-    st = obc_mtime_read(&frame_start);
+    st = sched_now(&frame_start, 0u);
     if (st != OBC_OK) {
         return st;
     }
@@ -139,15 +160,11 @@ obc_status_t obc_sched_run(uint32_t frames)
 
         /* Slack: ticks left between the last dispatch and the frame end. A
          * frame with no slack is a frame about to overrun. */
-        st = obc_mtime_read(&now);
+        /* Entry point 3 of 3: the clock. A timer that will not settle is a
+         * machine fault, and continuing to schedule against it would mean
+         * trusting deadlines derived from a value the reader rejected. */
+        st = sched_now(&now, frame);
         if (st != OBC_OK) {
-            /* Entry point 3 of 3: the clock. A timer that will not settle is a
-             * machine fault, and continuing to schedule against it would mean
-             * trusting deadlines derived from a value the reader rejected. */
-            if (st == OBC_ERR_UNSTABLE) {
-                obc_safe_entry_frame = frame;
-                obc_mode_enter_safe(OBC_SAFE_CLOCK);
-            }
             return st;
         }
         if (now >= deadline) {
@@ -174,7 +191,7 @@ obc_status_t obc_sched_run(uint32_t frames)
          * happen.
          */
         for (guard = 0u; guard < (OBC_FRAME_TICKS * 8192u); guard++) {
-            st = obc_mtime_read(&now);
+            st = sched_now(&now, frame);
             if (st != OBC_OK) {
                 return st;
             }

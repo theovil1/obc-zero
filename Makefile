@@ -120,7 +120,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check lint test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check lint test-safe safe-one safe-clock test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -410,6 +410,75 @@ test-sched-repro: $(TARGET)
 	$(call dump_trace,$(BUILD)/trace-a.txt)
 	$(call dump_trace,$(BUILD)/trace-b.txt)
 	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-a.txt $(BUILD)/trace-b.txt
+
+# --- Safe mode ----------------------------------------------------------------
+#
+# ADR 0005 requires safe mode to be reachable from three subsystems and
+# observable from outside. Both halves are tested: a mode nothing can reach is a
+# code path, and a mode the host cannot observe cannot be tested at all — which
+# M5 would discover when its escalation ladder had to tell degraded from
+# restarted.
+#
+# The three entries are genuinely different mechanisms, not three callers of one
+# function: one goes through a reset, two do not, and one needs a broken clock
+# because no debugger write can make mtime disagree with itself.
+test-safe: $(TARGET)
+	@echo "safe: reachable from three subsystems, observable from outside"
+	@$(MAKE) --no-print-directory safe-one WHICH=trap
+	@$(MAKE) --no-print-directory safe-one WHICH=overrun
+	@$(MAKE) --no-print-directory safe-clock
+	@echo "PASS (three entry points, three distinct reasons)"
+
+# $(WHICH) = trap | overrun
+safe-one: $(TARGET)
+	@printf "  %-9s " "$(WHICH)"
+	@rm -f $(BUILD)/serial.log $(BUILD)/safe.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s -S & \
+	 qpid=$$!; sleep 1; \
+	 if [ "$(WHICH)" = trap ]; then \
+	   timeout 40 $(GDB) $(TARGET) -batch -ex 'set $$fault_mode = 1' \
+	     -x harness/faults/fault.gdb > $(BUILD)/safe.log 2>&1; \
+	   marker='FAULT-INJECTED'; want='trap on a previous boot'; \
+	 else \
+	   timeout 60 $(GDB) $(TARGET) -batch \
+	     -x harness/faults/safemode.gdb > $(BUILD)/safe.log 2>&1; \
+	   marker='SAFE-INJECTED'; want='frame overrun'; \
+	 fi; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF "$$marker" $(BUILD)/safe.log \
+	   || { echo "FAIL: nothing was injected, so this proved nothing"; \
+	        tail -5 $(BUILD)/safe.log; exit 1; }; \
+	 grep -qF "mode   : SAFE, $$want" $(BUILD)/serial.log \
+	   || { echo "FAIL: safe mode was not entered, or not for the right reason"; \
+	        grep -E 'mode|sched|boot' $(BUILD)/serial.log; exit 1; }; \
+	 echo "ok - $$(grep -F 'mode   : SAFE' $(BUILD)/serial.log | head -1 | sed 's/mode   : //')"
+
+# The clock entry needs a broken timer: no debugger write can make mtime
+# disagree with itself across the three reads inside obc_mtime_read.
+safe-clock:
+	@printf "  %-9s " "clock"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory MTIME_SRC=harness/broken/mtime_unstable.c \
+	    $(TARGET) >/dev/null
+	@rm -f $(BUILD)/serial.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) & \
+	 qpid=$$!; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 40 ))); do \
+	   grep -qE 'boot   : (ok|FAULT)' $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'mode   : SAFE, clock would not settle' $(BUILD)/serial.log \
+	   || { echo "FAIL: an unsettled clock did not degrade the system"; \
+	        grep -E 'mode|sched|boot' $(BUILD)/serial.log; exit 1; }; \
+	 echo "ok - SAFE, clock would not settle"
+	@$(MAKE) --no-print-directory clean >/dev/null
 
 # --- Host code lint -----------------------------------------------------------
 #

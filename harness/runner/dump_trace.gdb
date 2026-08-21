@@ -30,15 +30,19 @@ printf "trace_len %u\n", obc_trace_len
 printf "trace_overflow %u\n", obc_trace_overflow
 printf "frame_overruns %u\n", obc_frame_overruns
 printf "slack_min %u\n", obc_slack_ticks_min
+printf "mode %u\n", obc_mode
+printf "safe_reason %u\n", obc_safe_reason
+printf "safe_entry_frame %u\n", obc_safe_entry_frame
 printf "window_start %u\n", obc_window_start_ticks
 printf "window_end %u\n", obc_window_end_ticks
 
 set $i = 0
 while $i < obc_task_count
-  printf "task %u %s %u %u %u %u %u\n", $i, \
+  printf "task %u %s %u %u %u %u %u %u\n", $i, \
     obc_task_table[$i].name, \
     obc_task_table[$i].period_frames, \
     obc_task_table[$i].budget_instr, \
+    obc_task_table[$i].essential, \
     obc_task_state[$i].runs, \
     obc_task_state[$i].overruns, \
     obc_task_state[$i].max_instr

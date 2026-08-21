@@ -28,6 +28,7 @@ class Task:
     name: str
     period_frames: int
     budget_instr: int
+    essential: bool
     runs: int
     overruns: int
     max_instr: int
@@ -44,6 +45,9 @@ class Dump:
     trace_overflow: int
     frame_overruns: int
     slack_min: int
+    mode: int
+    safe_reason: int
+    safe_entry_frame: int
     window_start: int
     window_end: int
     tasks: tuple[Task, ...]
@@ -63,16 +67,17 @@ def parse_dump(text: str) -> Dump:
             continue
         if parts[0] == "DUMP-COMPLETE":
             complete = True
-        elif parts[0] == "task" and len(parts) == 8:
+        elif parts[0] == "task" and len(parts) == 9:
             tasks.append(
                 Task(
                     index=int(parts[1]),
                     name=parts[2].strip('"'),
                     period_frames=int(parts[3]),
                     budget_instr=int(parts[4]),
-                    runs=int(parts[5]),
-                    overruns=int(parts[6]),
-                    max_instr=int(parts[7]),
+                    essential=bool(int(parts[5])),
+                    runs=int(parts[6]),
+                    overruns=int(parts[7]),
+                    max_instr=int(parts[8]),
                 )
             )
         elif parts[0] == "trace" and len(parts) == 3:
@@ -97,6 +102,9 @@ def parse_dump(text: str) -> Dump:
         "slack_min",
         "window_start",
         "window_end",
+        "mode",
+        "safe_reason",
+        "safe_entry_frame",
     } - scalars.keys()
     if missing:
         raise ValueError(f"the dump is missing fields: {sorted(missing)}")
@@ -110,11 +118,18 @@ def parse_dump(text: str) -> Dump:
         trace_overflow=scalars["trace_overflow"],
         frame_overruns=scalars["frame_overruns"],
         slack_min=scalars["slack_min"],
+        mode=scalars["mode"],
+        safe_reason=scalars["safe_reason"],
+        safe_entry_frame=scalars["safe_entry_frame"],
         window_start=scalars["window_start"],
         window_end=scalars["window_end"],
         tasks=tuple(sorted(tasks, key=lambda t: t.index)),
         trace=ordered,
     )
+
+
+SAFE_ENTRY_NONE = 0xFFFFFFFF
+MODE_SAFE = 1
 
 
 def expected_trace(dump: Dump) -> tuple[int, ...]:
@@ -123,11 +138,23 @@ def expected_trace(dump: Dump) -> tuple[int, ...]:
     Table order within a frame, every task whose period divides the frame index.
     No tolerance and no alternative ordering: a cyclic executive with a static
     table has exactly one correct sequence.
+
+    From the frame safe mode was entered onwards, that sequence is the essential
+    subset only. Deriving the degraded expectation instead of exempting degraded
+    runs from checking is the point: a run that degrades is exactly when a
+    scheduler is most likely to be wrong, and skipping the assertion there would
+    leave the interesting case unchecked.
     """
     sequence: list[int] = []
+    entry = dump.safe_entry_frame
     for frame in range(dump.window_frames):
+        degraded = entry != SAFE_ENTRY_NONE and frame > entry
         for task in dump.tasks:
-            if task.period_frames > 0 and frame % task.period_frames == 0:
+            if task.period_frames == 0:
+                continue
+            if degraded and not task.essential:
+                continue
+            if frame % task.period_frames == 0:
                 sequence.append(task.index)
     return tuple(sequence)
 
@@ -159,13 +186,18 @@ def check_conformance(dump: Dump) -> list[str]:
             "ticks) — the frames were not waited out"
         )
 
+    # Counts are derived from the same expected sequence as the order check, so a
+    # degraded run is held to the degraded expectation rather than exempted.
+    expected_counts: dict[int, int] = {}
+    for index in expected_trace(dump):
+        expected_counts[index] = expected_counts.get(index, 0) + 1
+
     for task in dump.tasks:
-        expected = dump.window_frames // task.period_frames
+        expected = expected_counts.get(task.index, 0)
         if task.runs != expected:
             failures.append(
                 f"task {task.name!r} ran {task.runs} times, the table dictates "
-                f"exactly {expected} ({dump.window_frames} frames / period "
-                f"{task.period_frames})"
+                f"exactly {expected}"
             )
     return failures
 

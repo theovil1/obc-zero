@@ -5,4 +5,4 @@
 .init         158
 .rodata      1332
 .stack       1024
-.text        3120
+.text        3152
