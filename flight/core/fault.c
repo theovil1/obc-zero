@@ -100,6 +100,32 @@ obc_status_t obc_fault_validate(uint32_t *out_reset_cause)
     return OBC_OK;
 }
 
+/* Implemented in flight/boot/trap.S. */
+void obc_reset_now(void) __attribute__((noreturn));
+
+void obc_fault_reset_with_cause(uint32_t cause)
+{
+    /*
+     * Payload first, then checksum, then magic — the same order the handler
+     * uses, and for the same reason: the magic is the commit point, so a reset
+     * landing mid-write leaves a record the reader rejects rather than one it
+     * half-believes.
+     *
+     * cause, epc and tval are zeroed rather than left stale: this reset is not
+     * a fault and must not carry a fault's details, however tempting it would
+     * be to keep whatever happened to be there.
+     */
+    obc_fault_record.magic = 0u;
+    obc_fault_record.cause = 0u;
+    obc_fault_record.epc = 0u;
+    obc_fault_record.tval = 0u;
+    obc_fault_record.reset_cause = cause;
+    obc_fault_record.checksum = obc_fault_checksum(&obc_fault_record);
+    obc_fault_record.magic = OBC_FAULT_MAGIC;
+
+    obc_reset_now();
+}
+
 void obc_fault_consume(void)
 {
     /* Magic first, in reverse of the write order: clearing the commit point

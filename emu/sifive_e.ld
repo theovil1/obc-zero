@@ -51,6 +51,17 @@ SECTIONS
 
     .text : ALIGN(4)
     {
+        /*
+         * Deliberate-reset entry point. It has no caller in flight code yet —
+         * M5 supplies the policy that decides when to ask for a reset — so
+         * --gc-sections drops it, and the harness test that exercises it then
+         * fails to find the symbol.
+         *
+         * Kept rather than given an artificial caller: the mechanism belongs to
+         * M1 and the decision to use it belongs to M5. Inventing a call site to
+         * satisfy the linker would misrepresent both.
+         */
+        KEEP(*(.text.obc_fault_reset_with_cause))
         *(.text .text.*)
         . = ALIGN(4);
     } > FLASH

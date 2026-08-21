@@ -61,6 +61,10 @@
 #define OBC_RESET_UNKNOWN 0u
 #define OBC_RESET_TRAP 1u
 #define OBC_RESET_DOUBLE_FAULT 2u
+/* A reset the software asked for, through the watchdog, with nothing wrong.
+ * Distinct from a trap so that a deliberate restart is never read as a fault.
+ * M5 adds the policy that decides when to ask; M1 provides only the path. */
+#define OBC_RESET_REQUESTED 3u
 
 #ifndef __ASSEMBLER__
 
@@ -115,6 +119,15 @@ static inline uint32_t obc_mcause_code(uint32_t mcause)
  * no other field of such a record is meaningful and none is returned.
  */
 obc_status_t obc_fault_validate(uint32_t *out_reset_cause);
+
+/*
+ * Records `cause` and resets through the AON watchdog. Does not return.
+ *
+ * This is the deliberate-reset path, reached from ordinary context rather than
+ * from a fault, so unlike the trap handler it may use the stack. It shares the
+ * same write order — payload, checksum, magic — and the same reset mechanism.
+ */
+void obc_fault_reset_with_cause(uint32_t cause) __attribute__((noreturn));
 
 /* Invalidates the record so the next boot does not read a stale one. Clears the
  * magic first, which is the commit point in reverse. */

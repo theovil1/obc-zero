@@ -178,7 +178,19 @@ static obc_status_t print_timebase_check(void)
         return w;
     }
     if (milli < low || milli > high) {
+        /*
+         * Name both hypotheses. The ratio is fixed jointly by the timer
+         * frequency and by the -icount shift, so it cannot tell them apart —
+         * and the nominal reason for it to move is someone deliberately
+         * changing the shift, not the timer going wrong. A message blaming the
+         * timer alone would send the next person hunting a regression that
+         * does not exist.
+         */
         (void)obc_uart_puts(" FAULT out of tolerance\r\n");
+        (void)obc_uart_puts("         either -icount shift is not 6 "
+                            "(the usual cause, and deliberate)\r\n");
+        (void)obc_uart_puts("         or the machine timer is not 32768 Hz "
+                            "(a real regression)\r\n");
         return OBC_ERR_INVALID;
     }
     return obc_uart_puts(" ok\r\n");
@@ -404,6 +416,9 @@ static obc_status_t print_reset_cause(void)
     }
     if (reset_cause == OBC_RESET_DOUBLE_FAULT) {
         return obc_uart_puts("DOUBLE FAULT (no detail recorded, by design)\r\n");
+    }
+    if (reset_cause == OBC_RESET_REQUESTED) {
+        return obc_uart_puts("requested (watchdog, nothing was wrong)\r\n");
     }
 
     w = obc_uart_puts("trap mcause=");

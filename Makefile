@@ -108,7 +108,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run test test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check test test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -306,13 +306,61 @@ test-stability:
 	    RUN_TIMEOUT_S=120 test
 	@$(MAKE) --no-print-directory clean >/dev/null
 
+# --- Runtime dependency guard -------------------------------------------------
+#
+# The compiler emits calls the source never mentions: 64-bit division and shift
+# become __udivdi3 and friends, a large struct initialiser becomes memcpy, a
+# large zeroing becomes memset. None of these appear in a grep of flight/.
+#
+# Today a freestanding link fails on them, loudly, which is the desired
+# behaviour. The risk this guard covers is the *fix*: adding -lgcc or -lc to
+# make a link error go away pulls the helper in silently and the build goes
+# green with a dependency nobody decided to take. That is the failure this
+# catches, and the linker cannot.
+#
+# Two checks. The undefined set must be empty — a fully linked freestanding
+# image resolves everything. And no helper may appear anywhere in the symbol
+# table, which is what catches a library that was linked in deliberately.
+FORBIDDEN_SYMS := __udivdi3|__umoddi3|__divdi3|__moddi3|__muldi3 \
+                  |__ashldi3|__ashrdi3|__lshrdi3|__clzsi2|__ctzsi2 \
+                  |__divsi3|__udivsi3|__modsi3|__umodsi3 \
+                  |memcpy|memset|memmove|memcmp|strlen|strcpy \
+                  |malloc|calloc|realloc|free|printf|sprintf|puts
+
+# Undefined symbols that are allowed. Empty on purpose: adding a name here is a
+# decision, and it should look like one in the diff.
+ALLOWED_UNDEF :=
+
+deps-check: $(TARGET)
+	@undef=$$($(CROSS)nm --undefined-only $(TARGET) 2>/dev/null \
+	          | awk '{print $$2}' | grep -v '^$$' | sort -u); \
+	 if [ -n "$(ALLOWED_UNDEF)" ]; then \
+	   undef=$$(echo "$$undef" | grep -vE '^($(ALLOWED_UNDEF))$$' || true); \
+	 fi; \
+	 if [ -n "$$undef" ]; then \
+	   echo "FAIL: unresolved symbols in a freestanding image:"; \
+	   echo "$$undef" | sed 's/^/  /'; exit 1; \
+	 fi
+	@found=$$($(CROSS)nm $(TARGET) 2>/dev/null | awk '{print $$NF}' \
+	          | grep -xE '$(FORBIDDEN_SYMS)' | sort -u || true); \
+	 if [ -n "$$found" ]; then \
+	   echo "FAIL: compiler or library helpers linked into the flight image:"; \
+	   echo "$$found" | sed 's/^/  /'; \
+	   echo; \
+	   echo "These are never written in flight/ — the compiler synthesised them,"; \
+	   echo "or a library was linked to silence a link error. Neither is allowed:"; \
+	   echo "the image must contain only code this project wrote or chose."; \
+	   exit 1; \
+	 fi
+	@echo "deps: no compiler or library helpers linked in"
+
 # --- Trap handler and fault record --------------------------------------------
 #
 # Three scenarios, in increasing order of what they rule out. Faults are made by
 # moving the program counter to an unmapped address rather than by planting a
 # trap instruction: flash is read-only, and a build carrying a deliberate fault
 # would not be the binary under test.
-TRAP_MODES := 1 2 3
+TRAP_MODES := 1 2 3 4
 
 test-trap: $(TARGET)
 	@echo "trap: fault injection through the gdbstub"
@@ -346,6 +394,11 @@ trap-one: $(TARGET)
 	          || { echo "FAIL: expected the original cause, got:$$line"; exit 1; };; \
 	   3)   echo "$$line" | grep -qF 'DOUBLE FAULT' \
 	          || { echo "FAIL: expected a double fault, got:$$line"; exit 1; };; \
+	   4)   echo "$$line" | grep -qF 'requested' \
+	          || { echo "FAIL: a deliberate reset was not reported as one:$$line"; exit 1; }; \
+	        echo "$$line" | grep -qF 'trap' \
+	          && { echo "FAIL: a deliberate reset was read as a fault:$$line"; exit 1; }; \
+	        true;; \
 	 esac; \
 	 echo "ok -$${line#*reset  :}"
 
@@ -441,6 +494,7 @@ measure:
 	@$(SIZE) $(TARGET)
 	@echo
 	@$(MAKE) --no-print-directory size-check
+	@$(MAKE) --no-print-directory deps-check
 	@echo
 	@$(MAKE) --no-print-directory test
 
