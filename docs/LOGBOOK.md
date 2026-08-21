@@ -5,6 +5,131 @@ measured, not what was intended.
 
 ---
 
+## 2026-08-20 — M2: the executive, and the property that had to come first
+
+**Measured commit:** `4df8c5d43f306053e4b0bd8e3ee240913e1ae052`
+**Toolchain:** GCC 14.2.0, QEMU 10.2.1
+**Branch:** `feat/m2-scheduler` — first milestone worked on a branch.
+
+### The assertion compares against the table, never against a tolerance
+
+Everything before this milestone failed loudly. The scheduler is the first
+component that can be subtly wrong and run correctly for months, so the property
+was fixed in ADR 0003 before any code: not *that the tasks run*, but that the
+order and the count in a window are exactly what the table dictates and do not
+vary between runs.
+
+Three results, each shown to fail before being trusted.
+
+**A dropped dispatch is rejected.** `harness/broken/sched_skip.c` omits one
+dispatch, once, in the middle of the window. The system boots, every task runs,
+the frames are waited out, the slack is healthy, and the serial log looks
+correct. Only the numbers betray it:
+
+```
+task 'housekeeping' ran 15 times, the table dictates exactly 16 (16 frames / period 1)
+trace has 29 dispatches, the table dictates 30
+```
+
+That defect is what a scheduler wrong in an ordinary way looks like. Nothing in
+the serial output would ever have shown it.
+
+**An overrun is counted, and the task is not prevented.** A table whose budget
+sits at 100 instructions against a task costing 2008:
+
+```
+note: task 'audit' overran 2 times (worst 2008 of 100 instructions)
+16 frames, 30 dispatches, 16384 ticks spanned, order and counts match the table
+```
+
+Both halves are asserted. A test checking only the first would pass just as
+happily on an implementation that killed the overrunning task — a different
+system substituted for the one ADR 0003 chose, with nobody saying so.
+
+### An assertion that was missing, found by an unexplained number
+
+The full run took 0.2 s of host time. Sixteen frames of 1024 ticks is half a
+guest second, which at the ×5 slowdown measured earlier should have been about
+2.5 s. The discrepancy was the interesting part.
+
+It turned out the earlier figure was measured with an MMIO-heavy loop and does
+not generalise; the frames were being waited out correctly. But chasing it
+exposed a real gap: **nothing asserted that the window took the time it should
+have.** An executive could dispatch the right tasks in the right order, record
+healthy slack, and never actually wait a frame — correct in everything the trace
+can see, and wrong about time.
+
+The window's start and end tick values are now recorded and the span asserted
+exactly:
+
+```
+window_start 534   window_end 16918   span 16384 = 16 x 1024
+```
+
+The lesson is not the number. It is that an unexplained measurement was worth
+stopping for, and that the assertion it produced is one no amount of reasoning
+about the design would have suggested.
+
+### Reproducibility: the criterion assumed something that is not true here
+
+The criterion said to validate trace equality "by first confirming that a
+deliberately non-deterministic task makes them differ". **That task cannot be
+written.** Under `-icount` the guest has no source of non-determinism, which is
+the whole reason `-icount` was adopted.
+
+Removing `-icount` does make the counts differ — but the timebase assertion
+refuses the boot before the window ever runs, so the sentinel never appears.
+That is the correct chain and it is not a demonstration.
+
+So the comparator is validated against two *different* images instead, and the
+criterion now says so. Its standing value is as a detector of anything that
+later breaks determinism, not as a check that could fail today.
+
+### Two implementation findings
+
+**The dump attaches to a parked target rather than breaking on a function.**
+The first version broke on `print_sched_summary`, which is static and which
+`-Os` inlined out of existence. The breakpoint resolved to an address the flow
+never reached as GDB expected, and `continue` simply never returned. Since the
+firmware parks after the window closes, no breakpoint is needed at all: attach,
+read RAM, detach. That removes a whole class of fragility.
+
+**The checker derives its expectations from the binary.** The task table is
+dumped alongside the results and the expected sequence is computed from it. A
+duplicated set of periods on the host would drift, and when it did the assertion
+would start checking the host's opinion rather than the flight software's table.
+
+### Measurement
+
+`make measure` on `4df8c5d`:
+
+```
+   text    data     bss     dec     hex filename
+   4134       0    1448    5582    15ce build/obc.elf
+
+size: matches docs/size-reference.txt
+deps: no compiler or library helpers linked in
+```
+
+RAM 1448 B of 16384 B. The scheduler took **384 B of its 512 B line**, 256 B of
+which is the trace buffer. The task table costs nothing in RAM: it is `const`
+and lives in flash, which also means a corrupted RAM word cannot change a period
+or redirect a function pointer.
+
+Eleven targets green: `test`, `test-poisoned`, `test-carry`,
+`test-carry-broken`, `test-stability`, `test-trap`, `test-record`, `deps-check`,
+`test-sched`, `test-sched-repro`, plus the two that must reject —
+`test-sched-broken` and `test-sched-overrun`.
+
+### Open
+
+`ruff` is not installed, so `harness/` cannot be shown clean as the host code
+rules require. Annotations and line length were checked by hand, which is a
+manual verification and not the property demanded. It needs installing before
+the harness grows further.
+
+---
+
 ## 2026-08-20 — M1 closed: deliberate reset, and a guard for what the compiler adds
 
 **Measured commit:** `76f7ca8c03fd7536db6145d7a6aa1fbd59e1e317`

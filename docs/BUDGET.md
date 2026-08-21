@@ -82,7 +82,7 @@ this project fail at M8.
 
 ## Current consumption
 
-Measured on commit `TBD` by `make measure`. See `docs/LOGBOOK.md` for the
+Measured on commit `4df8c5d` by `make measure`. See `docs/LOGBOOK.md` for the
 run that produced these numbers.
 
 | | Bytes |
