@@ -1,0 +1,132 @@
+/*
+ * Cyclic executive.
+ *
+ * The property this exists to make provable is stated in
+ * docs/adr/0003-scheduler-observability.md and is worth repeating here, because
+ * it is not the obvious one: what must be shown is **not that the tasks run**.
+ * It is that the order and the number of executions within a window are exactly
+ * those the table dictates, and that they do not vary between runs.
+ *
+ * A scheduler that runs a task 999 times instead of 1000 produces a system that
+ * works, until the missing execution is the one that mattered. That is why the
+ * assertions compare against the table rather than against a tolerance.
+ *
+ * Copyright 2026 Théo Vilain
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#ifndef OBC_SCHED_H
+#define OBC_SCHED_H
+
+#include <stdint.h>
+
+#include "core/status.h"
+#include "hal/mtime.h"
+
+/*
+ * Minor frame, in machine-timer ticks. A power of two on purpose: it makes
+ * "N frames" and "every P frames" exact rather than approximately exact, which
+ * is what allows the conformance assertion to demand an equality instead of a
+ * range.
+ *
+ * 1024 ticks at 32768 Hz is 31.25 ms.
+ */
+#define OBC_FRAME_TICKS 1024u
+
+/*
+ * Instructions available inside one frame, derived from the ratio measured in
+ * ADR 0002 rather than from a guess.
+ *
+ * This figure is an *emulation* property: it depends on the -icount shift, and
+ * on real silicon it depends on the core clock. It is used only for the
+ * compile-time check that the declared budgets can fit in a frame at all. It is
+ * not a claim about hardware, and ADR 0002 requires the port to recalibrate.
+ */
+#define OBC_MILLI_INSTR_PER_TICK 476837u
+#define OBC_FRAME_INSTR_CAPACITY \
+    ((uint32_t)((OBC_MILLI_INSTR_PER_TICK / 1000u) * OBC_FRAME_TICKS))
+
+/* Hard ceiling on the table, so the trace and the state arrays are sized at
+ * compile time like everything else here. */
+#define OBC_MAX_TASKS 8u
+
+/* The window the milestone's assertions run over. Fixed here so the table's
+ * compile-time checks and the executive agree on it by construction. */
+#define OBC_SCHED_WINDOW_FRAMES 16u
+
+typedef void (*obc_task_fn)(void);
+
+/*
+ * A task, as declared. Entirely const: the table lives in flash, so a corrupted
+ * RAM word cannot turn a period into something else or redirect a function
+ * pointer. Mutable per-task state lives separately, in obc_task_state_t.
+ */
+typedef struct {
+    const char *name;
+    obc_task_fn fn;
+    uint32_t period_frames; /* dispatch every N frames; 1 means every frame */
+    uint32_t budget_instr;  /* retired instructions allowed per dispatch */
+} obc_task_t;
+
+/*
+ * Mutable per-task accounting. Separated from the declaration above so that the
+ * table can be const, and kept small because it is charged to the M2 line in
+ * docs/BUDGET.md.
+ */
+typedef struct {
+    uint32_t runs;
+    uint32_t overruns;
+    uint32_t max_instr; /* worst dispatch observed, in retired instructions */
+} obc_task_state_t;
+
+/*
+ * Execution trace: one byte of task index per dispatch, in dispatch order.
+ *
+ * Only the identity is recorded. Order and count are what the conformance and
+ * ordering assertions compare, and per-task instruction figures live in the
+ * state array where they cost three words rather than one entry per dispatch.
+ *
+ * Written to RAM and read out by the host through the debugger. Emitting it
+ * over the UART inside a dispatch would add instructions to the very count
+ * being asserted.
+ */
+#define OBC_TRACE_CAPACITY 256u
+
+extern volatile uint8_t obc_trace[OBC_TRACE_CAPACITY];
+extern volatile uint32_t obc_trace_len;
+extern volatile uint32_t obc_trace_overflow; /* dispatches dropped, must be 0 */
+
+extern obc_task_state_t obc_task_state[OBC_MAX_TASKS];
+
+/* Frame accounting. Slack is in ticks, not instructions: it is a scheduling
+ * quantity, and a frame is 1024 ticks so the resolution is ample. Budgets are
+ * in instructions because a task can run in less than one tick. */
+extern volatile uint32_t obc_frames_run;
+extern volatile uint32_t obc_frame_overruns;   /* frames that missed their end */
+extern volatile uint32_t obc_slack_ticks_min;  /* worst slack seen */
+
+/*
+ * Machine-timer value at the first and last frame boundary of the window.
+ *
+ * Their difference must be exactly frames x OBC_FRAME_TICKS. That is the
+ * assertion which catches an executive that dispatches the right tasks in the
+ * right order but does not actually wait out its frames — a scheduler that is
+ * correct in every respect the trace can see, and wrong about time.
+ */
+extern volatile uint32_t obc_window_start_ticks;
+extern volatile uint32_t obc_window_end_ticks;
+
+/* The table, defined in flight/core/tasks.c. */
+extern const obc_task_t obc_task_table[];
+extern const uint32_t obc_task_count;
+
+/*
+ * Runs exactly `frames` minor frames, then returns.
+ *
+ * Bounded by construction: the milestone's assertions are made over a finite
+ * window, and an executive that never returns could not be compared between
+ * runs. M3 supplies the endless outer loop once there is a recovery policy to
+ * put around it.
+ */
+obc_status_t obc_sched_run(uint32_t frames);
+
+#endif /* OBC_SCHED_H */

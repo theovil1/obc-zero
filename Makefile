@@ -69,7 +69,18 @@ RUN_TIMEOUT_S := 10
 # the carry test detects something. Must be defined before SRC_C uses it.
 MTIME_SRC ?= flight/hal/mtime.c
 
+# SCHED_SRC selects which executive is linked. The default is the flight one;
+# test-sched-broken swaps in a copy that drops one dispatch, to prove the
+# conformance and ordering assertions detect something.
+SCHED_SRC ?= flight/core/sched.c
+
+# TASKS_SRC selects the task table. test-sched-overrun swaps in one whose budget
+# is far below what its task costs.
+TASKS_SRC ?= flight/core/tasks.c
+
 SRC_C := flight/core/main.c \
+         $(SCHED_SRC) \
+         $(TASKS_SRC) \
          flight/core/fault.c \
          $(MTIME_SRC) \
          flight/hal/uart.c
@@ -108,7 +119,7 @@ LDFLAGS := $(ARCHFLAGS) -T $(LDSCRIPT) \
            -Wl,-Map=$(BUILD)/obc.map \
            -Wl,--no-warn-rwx-segments
 
-.PHONY: all build run deps-check test test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
+.PHONY: all build run deps-check test test-sched test-sched-repro test-sched-broken sched-expect-reject test-sched-overrun sched-expect-overrun test-trap trap-one test-record record-one test-stability test-poisoned test-carry carry-one test-carry-broken test-carry-expect-fault measure gdb attach size size-check size-accept clean
 
 all: build
 
@@ -305,6 +316,99 @@ test-stability:
 	    EXTRA_CFLAGS='-DTICK_CHECK_READS=$(STABILITY_READS)u' \
 	    RUN_TIMEOUT_S=120 test
 	@$(MAKE) --no-print-directory clean >/dev/null
+
+# --- Scheduler conformance ----------------------------------------------------
+#
+# What is asserted is not that the tasks run. It is that the order and the
+# number of executions in the window are exactly those the table dictates, and
+# that they do not change between runs. See docs/adr/0003-scheduler-observability.md.
+#
+# The trace is read out of guest RAM through the debugger rather than printed by
+# the firmware: emitting it inside a dispatch would add instructions to the very
+# count being asserted.
+PY := python3
+TRACE_CHECK := harness/runner/trace_check.py
+
+# $(1) = output file
+define dump_trace
+	@rm -f $(1) $(BUILD)/serial.log && touch $(BUILD)/serial.log
+	@$(QEMU) -machine $(MACHINE) $(ICOUNT) -display none \
+	    -serial file:$(BUILD)/serial.log -kernel $(TARGET) -s & \
+	 qpid=$$!; \
+	 for i in $$(seq 1 $$(( $(RUN_TIMEOUT_S) * 20 ))); do \
+	   grep -qF "$(SENTINEL)" $(BUILD)/serial.log 2>/dev/null && break; \
+	   kill -0 $$qpid 2>/dev/null || break; sleep 0.05; \
+	 done; \
+	 grep -qF "$(SENTINEL)" $(BUILD)/serial.log \
+	   || { echo "FAIL: the window never closed"; cat $(BUILD)/serial.log; \
+	        kill $$qpid 2>/dev/null; exit 1; }; \
+	 timeout 60 $(GDB) $(TARGET) -batch -x harness/runner/dump_trace.gdb \
+	   > $(1) 2>&1; \
+	 kill $$qpid 2>/dev/null; wait $$qpid 2>/dev/null; \
+	 grep -qF 'DUMP-COMPLETE' $(1) \
+	   || { echo "FAIL: the debugger did not finish reading guest memory"; \
+	        tail -5 $(1); exit 1; }
+endef
+
+test-sched: $(TARGET)
+	@echo "sched: conformance and ordering against the task table"
+	$(call dump_trace,$(BUILD)/trace-1.txt)
+	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-1.txt
+
+# Two runs of the same image must be indistinguishable. Under -icount any
+# difference is a defect by definition, since there is no non-determinism left
+# to attribute it to.
+# The checker must reject a scheduler that drops a single dispatch. Without this
+# every green run above is an assertion about nothing.
+#
+# The defect is chosen to be unremarkable: the system boots, every task runs, the
+# frames are waited out, and the serial log looks correct. Only the count and the
+# order betray it.
+test-sched-broken:
+	@echo "sched: a dropped dispatch must be rejected"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory SCHED_SRC=harness/broken/sched_skip.c \
+	    sched-expect-reject
+	@echo "PASS (the broken executive was correctly rejected)"
+	@$(MAKE) --no-print-directory clean >/dev/null
+
+sched-expect-reject: $(TARGET)
+	$(call dump_trace,$(BUILD)/trace-broken.txt)
+	@if $(PY) $(TRACE_CHECK) $(BUILD)/trace-broken.txt > $(BUILD)/broken.out 2>&1; then \
+	   echo "FAIL: the checker accepted a scheduler that drops a dispatch"; \
+	   cat $(BUILD)/broken.out; exit 1; \
+	 else \
+	   sed 's/^/    /' $(BUILD)/broken.out; \
+	 fi
+
+# An overrun must be detected and counted, and the task must NOT have been
+# prevented from running. Checking only the first half would pass on an
+# implementation that killed the task — a different system substituted for this
+# one without anyone saying so. See ADR 0003.
+test-sched-overrun:
+	@echo "sched: an overrun is counted, and the task still ran to completion"
+	@$(MAKE) --no-print-directory clean >/dev/null
+	@$(MAKE) --no-print-directory TASKS_SRC=harness/broken/tasks_overrun.c \
+	    sched-expect-overrun
+	@echo "PASS"
+	@$(MAKE) --no-print-directory clean >/dev/null
+
+sched-expect-overrun: $(TARGET)
+	$(call dump_trace,$(BUILD)/trace-over.txt)
+	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-over.txt > $(BUILD)/over.out 2>&1 \
+	  || { echo "FAIL: conformance broke, so this is not a clean overrun test"; \
+	       cat $(BUILD)/over.out; exit 1; }
+	@sed 's/^/    /' $(BUILD)/over.out
+	@grep -qE '^  note: .*overran' $(BUILD)/over.out \
+	  || { echo "FAIL: the overrun was not detected"; exit 1; }
+	@grep -qE 'order and counts match the table' $(BUILD)/over.out \
+	  || { echo "FAIL: the overrunning task was prevented from running"; exit 1; }
+
+test-sched-repro: $(TARGET)
+	@echo "sched: two runs must produce identical traces and counts"
+	$(call dump_trace,$(BUILD)/trace-a.txt)
+	$(call dump_trace,$(BUILD)/trace-b.txt)
+	@$(PY) $(TRACE_CHECK) $(BUILD)/trace-a.txt $(BUILD)/trace-b.txt
 
 # --- Runtime dependency guard -------------------------------------------------
 #

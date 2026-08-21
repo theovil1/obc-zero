@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "core/fault.h"
+#include "core/sched.h"
 #include "core/status.h"
 #include "hal/mtime.h"
 #include "hal/uart.h"
@@ -70,7 +71,6 @@
  * cannot be re-asserted from inside the guest. Stated here rather than left for
  * someone to assume this check proves more than it does.
  */
-#define OBC_MILLI_INSTR_PER_TICK 476837u
 #define OBC_MILLI_INSTR_TOLERANCE 4768u /* 1 percent */
 #define TIMEBASE_CHECK_TICKS 500u
 
@@ -485,6 +485,96 @@ static obc_status_t print_mscratch_invariant(void)
     return (w == OBC_OK) ? OBC_ERR_INVALID : w;
 }
 
+/*
+ * Reports the executive's outcome. The detail the assertions rely on is read
+ * from RAM by the host through the debugger; what is printed here is a summary
+ * for a human reading a serial log, and a sentinel-bearing verdict.
+ */
+static obc_status_t print_sched_summary(obc_status_t run_status)
+{
+    uint32_t i;
+    obc_status_t w;
+
+    w = obc_uart_puts("sched  : ");
+    if (w != OBC_OK) {
+        return w;
+    }
+    if (run_status != OBC_OK) {
+        (void)obc_uart_puts("FAULT executive returned an error\r\n");
+        return run_status;
+    }
+
+    w = obc_uart_put_u32(obc_frames_run);
+    if (w == OBC_OK) {
+        w = obc_uart_puts(" frames, ");
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_put_u32(obc_trace_len);
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts(" dispatches, min slack ");
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_put_u32(obc_slack_ticks_min);
+    }
+    if (w == OBC_OK) {
+        w = obc_uart_puts(" ticks\r\n");
+    }
+    if (w != OBC_OK) {
+        return w;
+    }
+
+    for (i = 0u; i < obc_task_count; i++) {
+        w = obc_uart_puts("  task ");
+        if (w == OBC_OK) {
+            w = obc_uart_puts(obc_task_table[i].name);
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_puts(" runs=");
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_put_u32(obc_task_state[i].runs);
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_puts(" max=");
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_put_u32(obc_task_state[i].max_instr);
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_puts("/");
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_put_u32(obc_task_table[i].budget_instr);
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_puts(" over=");
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_put_u32(obc_task_state[i].overruns);
+        }
+        if (w == OBC_OK) {
+            w = obc_uart_puts("\r\n");
+        }
+        if (w != OBC_OK) {
+            return w;
+        }
+    }
+
+    /* An overflowed trace means the window produced more dispatches than the
+     * buffer holds, so the ordering assertion would be comparing a truncated
+     * sequence. That is a failed test, not a warning. */
+    if (obc_trace_overflow != 0u) {
+        (void)obc_uart_puts("  TRACE OVERFLOW, the window is larger than the buffer\r\n");
+        return OBC_ERR_INVALID;
+    }
+    if (obc_frame_overruns != 0u) {
+        (void)obc_uart_puts("  FRAME OVERRUN\r\n");
+        return OBC_ERR_UNSTABLE;
+    }
+    return OBC_OK;
+}
+
 void obc_main(void)
 {
     obc_status_t st;
@@ -537,6 +627,16 @@ void obc_main(void)
     tick_st = print_tick_check();
     if (tick_st == OBC_OK) {
         tick_st = print_timebase_check();
+    }
+
+    /*
+     * Run the executive for a fixed window, then report. A finite window is
+     * what makes the trace comparable between runs; the endless outer loop
+     * arrives at M3 with a recovery policy to put around it.
+     */
+    if (st == OBC_OK && tick_st == OBC_OK) {
+        obc_status_t sch = obc_sched_run(OBC_SCHED_WINDOW_FRAMES);
+        st = print_sched_summary(sch);
     }
 
     /*

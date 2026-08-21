@@ -1,8 +1,8 @@
 # gcc      14.2.0
 # binutils 2.45.50.20251209
-.bss            4
+.bss          388
 .data           0
-.init         162
-.rodata       896
+.init         158
+.rodata      1208
 .stack       1024
-.text        1920
+.text        2768

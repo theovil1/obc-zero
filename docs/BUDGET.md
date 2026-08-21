@@ -18,7 +18,7 @@ to the reserve, but exceeding a line requires changing this file and saying why.
 |---|---|---:|---:|---|
 | Stack | M0 | 1024 | 6.3 % | **Allocated**, 64 B peak measured |
 | `.data` + `.bss`, core | M0–M3 | 0 | 0.0 % | **In use**, currently empty |
-| Scheduler state and task table | M2 | 512 | 3.1 % | Planned |
+| Scheduler state and task table | M2 | 512 | 3.1 % | **In use**, 384 B measured |
 | Panic context and safe-mode state | M3 | 256 | 1.6 % | Planned |
 | Triple-redundant critical state | M4 | 3072 | 18.8 % | Planned |
 | Telemetry frames and sensor mocks | M6 | 2048 | 12.5 % | Planned |
@@ -36,6 +36,13 @@ M1 introduces, which nests on top of whatever task was running, and the task
 call depth M2 introduces. There is no recursion and no allocation anywhere in
 the flight code, so stack growth is bounded by call-graph depth alone and can be
 checked statically. Revisit at M2 with a measurement taken under scheduler load.
+
+**Scheduler, 384 B of 512 B.** Measured, not estimated. The trace buffer is
+256 B of it — one byte of task index per dispatch, sized to hold the 16-frame
+assertion window with room to spare. The task table itself costs nothing here:
+it is `const` and lives in flash, which also means a corrupted RAM word cannot
+turn a period into something else or redirect a function pointer. Only the
+mutable per-task accounting is charged to RAM.
 
 **Triple-redundant critical state, 3072 B.** Three copies of a 1 KiB state
 block. This is the single largest functional line, and deliberately so: it is
@@ -68,14 +75,14 @@ this project fail at M8.
 2. The reserve is spent by explicit decision, never by drift.
 3. Anything that can live in flash lives in flash. Constant tables, lookup
    tables, and string literals belong in `.rodata`, which costs nothing here.
-   The flash budget is 4 MiB against 2698 bytes used, tracked in the Flash
+   The flash budget is 4 MiB against 4134 bytes used, tracked in the Flash
    section below; RAM is the only scarce resource on this board.
 4. No line may be met by making a buffer dynamic. There is no allocator and
    there will not be one.
 
 ## Current consumption
 
-Measured on commit `9e807df` by `make measure`. See `docs/LOGBOOK.md` for the
+Measured on commit `TBD` by `make measure`. See `docs/LOGBOOK.md` for the
 run that produced these numbers.
 
 | | Bytes |
@@ -85,7 +92,8 @@ run that produced these numbers.
 | Stack reserved | 1024 |
 | Stack peak observed | 64 |
 | `.noinit` (fault record) | 36 |
-| **Total committed** | **1064 of 16384** |
+| Scheduler state and trace | 384 |
+| **Total committed** | **1448 of 16384** |
 
 Remaining unallocated after the planned lines above: 3328 B.
 
@@ -99,6 +107,7 @@ observed fact rather than a discovery.
 |---|---:|---|
 | M0, first boot | 874 | banner and UART only |
 | M1, timer and traps | 2698 | tripled on one milestone |
+| M2, scheduler | 4134 | |
 | **Alert threshold** | **262144** | **arbitrary, and declared so** |
 | Budget | 4194304 | the link script's FLASH region |
 
