@@ -2,12 +2,18 @@
 
 - **Date:** 2026-08-21
 - **Commit:** `775b3d7`
+- **Provenance:** `reconstructed`
 - **Seed:** `1` — the campaign replays exactly from this alone
 - **Runs:** 1000
 - **Failures:** 0
 - **Wall clock:** 14.8 minutes
 
 ## Provenance
+
+`reconstructed`, declared in the header above so that a reader which is not a
+person can see it. Aggregating campaigns must not count this as a fresh
+measurement, and a paragraph saying so would be invisible to whatever does the
+counting.
 
 The figures are from a live 1000-run campaign on `775b3d7`. The file itself was
 regenerated afterwards, with the runner's own formatter and that run's exact

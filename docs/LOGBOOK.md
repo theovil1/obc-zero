@@ -67,6 +67,41 @@ Which is why the port collision was worth fixing at M4 rather than at M9, and
 why the campaign runner refuses instead of warning. **A harness may fail. It may
 not be confidently wrong.**
 
+### The one that could not be undone
+
+Of the four, the overwritten report is the serious one, and not because it was
+the most likely.
+
+A false pass costs a defect found later. A hardcoded port costs an afternoon. An
+audit that warns instead of blocking costs one bad commit, reverted. All three
+are recoverable by doing more work.
+
+**An overwritten report costs the evidence, and evidence does not come back.**
+The only reason the earlier campaign survives is that it had been committed
+before the second run — an accident of sequencing, not a property of anything.
+Had the two runs happened before either was committed, the first would simply be
+gone, and no amount of later work would reconstruct it: the campaign that
+produced it ran against a commit that no longer builds the same binary.
+
+Evidence is what this project produces. Code can be rewritten and measurements
+can be retaken, but a result that was observed and then destroyed is the one
+loss that more effort does not repair. Controls guarding evidence therefore come
+before controls guarding anything else.
+
+### `make test` failed once and would not do so again
+
+Recorded with the count, because in two months the only thing that will
+distinguish a rare defect from a new one is whether this entry exists.
+
+It failed once, inside a loop of six targets, immediately after a `git push`.
+Re-run alone: pass. Re-run three times: pass. Re-run inside a chained loop
+reproducing the original sequence: pass. Re-run immediately after another
+`push`: pass. **Six attempts at reproduction, none successful.**
+
+Classified transient because it resisted reproduction, not because that was the
+convenient reading — which is the distinction the false-red entry above is
+about. If it returns, this paragraph is the first data point.
+
 ### Also
 
 `size-accept` now refuses without `REASON=` and writes the reason, dated, into

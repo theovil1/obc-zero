@@ -272,14 +272,27 @@ def render(tally: Tally, total: int, started: float, live: bool) -> str:
 
 
 def write_report(
-    path: Path, tally: Tally, total: int, seed: int, elapsed: float, commit: str
+    path: Path,
+    tally: Tally,
+    total: int,
+    seed: int,
+    elapsed: float,
+    commit: str,
+    provenance: str = "measured",
 ) -> None:
-    """A report that names its seed, because one that does not is an anecdote."""
+    """A report that names its seed, because one that does not is an anecdote.
+
+    ``provenance`` is a header field rather than a sentence in the prose, so a
+    reader that is not a person can see it. The day campaigns are aggregated, a
+    reconstructed report must not be counted as a fresh measurement, and a
+    paragraph explaining that would be invisible to whatever does the counting.
+    """
     lines = [
         f"# Voter campaign, {total} randomised corruptions",
         "",
         f"- **Date:** {time.strftime('%Y-%m-%d')}",
         f"- **Commit:** `{commit}`",
+        f"- **Provenance:** `{provenance}`",
         f"- **Seed:** `{seed}` — the campaign replays exactly from this alone",
         f"- **Runs:** {total}",
         f"- **Failures:** {len(tally.failures)}",
