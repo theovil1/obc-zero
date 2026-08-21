@@ -26,9 +26,10 @@ The runner names its report by date. Re-running on the same day **overwrote the
 previous report**, and the only reason the earlier one survives is that it had
 been committed.
 
-`CLAUDE.md` has said since M0 that reports are append-only history, superseded by
-newer ones and never edited. The rule was written for a human editing a file,
-and the thing that broke it was a program doing what it was told.
+The project's rules have said since M0 that reports are append-only history,
+superseded by newer ones and never edited. The rule was written for a human
+editing a file, and the thing that broke it was a program doing what it was
+told.
 
 Two fixes, and the second matters more than the first:
 
